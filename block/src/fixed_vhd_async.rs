@@ -14,6 +14,7 @@ use crate::fixed_vhd::FixedVhd;
 use crate::raw_async::RawFileAsync;
 use crate::{BatchRequest, BlockBackend};
 
+#[derive(Debug)]
 pub struct FixedVhdDiskAsync(FixedVhd);
 
 impl FixedVhdDiskAsync {

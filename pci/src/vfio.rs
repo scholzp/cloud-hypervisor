@@ -5,6 +5,7 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Debug;
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -95,22 +96,24 @@ enum InterruptUpdateAction {
     DisableMsix,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct IntxState {
     enabled: bool,
 }
 
+#[derive(Debug)]
 pub(crate) struct VfioIntx {
     interrupt_source_group: Arc<dyn InterruptSourceGroup>,
     enabled: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct MsiState {
     cap: MsiCap,
     cap_offset: u32,
 }
 
+#[derive(Debug)]
 pub(crate) struct VfioMsi {
     pub(crate) cfg: MsiConfig,
     cap_offset: u32,
@@ -137,13 +140,14 @@ impl VfioMsi {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct MsixState {
     cap: MsixCap,
     cap_offset: u32,
     bdf: u32,
 }
 
+#[derive(Debug)]
 pub(crate) struct VfioMsix {
     pub(crate) bar: MsixConfig,
     cap: MsixCap,
@@ -182,6 +186,7 @@ impl VfioMsix {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct Interrupt {
     pub(crate) intx: Option<VfioIntx>,
     pub(crate) msi: Option<VfioMsi>,
@@ -258,7 +263,7 @@ impl Interrupt {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct UserMemoryRegion {
     pub slot: u32,
     pub start: u64,
@@ -266,7 +271,7 @@ pub struct UserMemoryRegion {
     pub host_addr: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MmioRegion {
     pub start: GuestAddress,
     pub length: GuestUsize,
@@ -323,7 +328,7 @@ pub enum VfioError {
     VfioUser(#[source] vfio_user::Error),
 }
 
-pub(crate) trait Vfio: Send + Sync {
+pub(crate) trait Vfio: Send + Sync + Debug {
     fn read_config_byte(&self, offset: u32) -> u8 {
         let mut data: [u8; 1] = [0];
         self.read_config(offset, &mut data);
@@ -395,7 +400,6 @@ pub(crate) trait Vfio: Send + Sync {
         unimplemented!()
     }
 }
-
 struct VfioDeviceWrapper {
     device: Arc<VfioDevice>,
 }
@@ -403,6 +407,17 @@ struct VfioDeviceWrapper {
 impl VfioDeviceWrapper {
     fn new(device: Arc<VfioDevice>) -> Self {
         Self { device }
+    }
+}
+
+impl std::fmt::Debug for VfioDeviceWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VfioDeviceWrapper")
+            .field(
+                "device",
+                &format!("VfioDevice at {:x?}", Arc::as_ptr(&self.device)),
+            )
+            .finish()
     }
 }
 
@@ -438,18 +453,19 @@ impl Vfio for VfioDeviceWrapper {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct VfioCommonState {
     intx_state: Option<IntxState>,
     msi_state: Option<MsiState>,
     msix_state: Option<MsixState>,
 }
 
+#[derive(Debug)]
 pub(crate) struct ConfigPatch {
     mask: u32,
     patch: u32,
 }
-
+#[derive(Debug)]
 pub(crate) struct VfioCommon {
     pub(crate) configuration: PciConfiguration,
     pub(crate) mmio_regions: Vec<MmioRegion>,
@@ -1449,6 +1465,28 @@ pub struct VfioPciDevice {
     device_path: PathBuf,
 }
 
+impl std::fmt::Debug for VfioPciDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VfioPciDevice")
+            .field("id", &self.id)
+            .field("vm", &self.vm)
+            .field(
+                "device",
+                &format!("VfioDevice at {:x?}", Arc::as_ptr(&self.device)),
+            )
+            .field(
+                "container",
+                &format!("VfioContainer at {:x?}", Arc::as_ptr(&self.container)),
+            )
+            .field("common", &self.common)
+            .field("iommu_attached", &self.iommu_attached)
+            .field("memory_slot_allocator", &self.memory_slot_allocator)
+            .field("bdf", &self.bdf)
+            .field("device_path", &self.device_path)
+            .finish()
+    }
+}
+
 impl VfioPciDevice {
     /// Constructs a new Vfio Pci device for the given Vfio device
     #[allow(clippy::too_many_arguments)]
@@ -2006,6 +2044,22 @@ pub struct VfioDmaMapping<M: GuestAddressSpace> {
     mmio_regions: Arc<Mutex<Vec<MmioRegion>>>,
 }
 
+impl<M: GuestAddressSpace> std::fmt::Debug for VfioDmaMapping<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VfioDmaMapping")
+            .field(
+                "container",
+                &format!("VfioContainer at {:x?}", Arc::as_ptr(&self.container)),
+            )
+            .field(
+                "memory",
+                &format!("GuestAddressSpace at {:x?}", Arc::as_ptr(&self.memory)),
+            )
+            .field("mmio_regions", &self.mmio_regions)
+            .finish()
+    }
+}
+
 impl<M: GuestAddressSpace> VfioDmaMapping<M> {
     /// Create a DmaMapping object.
     /// # Parameters
@@ -2025,7 +2079,7 @@ impl<M: GuestAddressSpace> VfioDmaMapping<M> {
     }
 }
 
-impl<M: GuestAddressSpace + Sync + Send> ExternalDmaMapping for VfioDmaMapping<M> {
+impl<M: GuestAddressSpace + Sync + Send + Debug> ExternalDmaMapping for VfioDmaMapping<M> {
     fn map(&self, iova: u64, gpa: u64, size: u64) -> std::result::Result<(), io::Error> {
         let mem = self.memory.memory();
         let guest_addr = GuestAddress(gpa);

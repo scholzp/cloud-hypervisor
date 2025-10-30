@@ -9,9 +9,9 @@
 // Copyright 2018-2019 CrowdStrike, Inc.
 //
 //
-
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt::Debug;
 #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
 use std::mem::offset_of;
 #[cfg(any(feature = "tdx", feature = "kvm"))]
@@ -456,6 +456,7 @@ impl From<IrqRoutingEntry> for kvm_irq_routing_entry {
     }
 }
 
+#[derive(Debug)]
 struct KvmDirtyLogSlot {
     slot: u32,
     guest_phys_addr: u64,
@@ -464,6 +465,7 @@ struct KvmDirtyLogSlot {
 }
 
 /// Wrapper over KVM VM ioctls.
+#[derive(Debug)]
 pub struct KvmVm {
     fd: Arc<VmFd>,
     #[cfg(target_arch = "x86_64")]
@@ -1104,6 +1106,7 @@ fn tdx_command(
 }
 
 /// Wrapper over KVM system ioctls.
+#[derive(Debug)]
 pub struct KvmHypervisor {
     kvm: Kvm,
 }
@@ -1352,6 +1355,7 @@ impl hypervisor::Hypervisor for KvmHypervisor {
 }
 
 /// Vcpu struct for KVM
+#[derive(Debug)]
 pub struct KvmVcpu {
     fd: Arc<Mutex<VcpuFd>>,
     #[cfg(target_arch = "x86_64")]

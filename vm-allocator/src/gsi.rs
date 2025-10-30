@@ -30,6 +30,7 @@ impl GsiApic {
 }
 
 /// GsiAllocator
+#[derive(Debug)]
 pub struct GsiAllocator {
     #[cfg(target_arch = "x86_64")]
     apics: BTreeMap<u32, u32>,

@@ -17,6 +17,7 @@ use crate::async_io::{
     AsyncIo, AsyncIoError, AsyncIoResult, BorrowedDiskFd, DiskFile, DiskFileError, DiskFileResult,
 };
 
+#[derive(Debug)]
 pub struct RawFileDiskAio {
     file: File,
 }
@@ -55,6 +56,7 @@ impl DiskFile for RawFileDiskAio {
     }
 }
 
+#[derive(Debug)]
 pub struct RawFileAsyncAio {
     fd: RawFd,
     ctx: aio::IoContext,

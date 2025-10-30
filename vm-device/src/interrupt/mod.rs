@@ -57,6 +57,7 @@
 //! * The virtual device backend requests the interrupt manager to create an interrupt group
 //!   according to guest configuration information
 
+use std::fmt::Debug;
 use std::sync::Arc;
 
 pub use hypervisor::{InterruptSourceConfig, LegacyIrqSourceConfig, MsiIrqSourceConfig};
@@ -92,7 +93,7 @@ pub struct MsiIrqGroupConfig {
 ///
 /// The InterruptManager implementations should protect itself from concurrent accesses internally,
 /// so it could be invoked from multi-threaded context.
-pub trait InterruptManager: Send + Sync {
+pub trait InterruptManager: Send + Sync + Debug {
     type GroupConfig;
 
     /// Create an [InterruptSourceGroup](trait.InterruptSourceGroup.html) object to manage
@@ -116,7 +117,7 @@ pub trait InterruptManager: Send + Sync {
     fn destroy_group(&self, group: Arc<dyn InterruptSourceGroup>) -> Result<()>;
 }
 
-pub trait InterruptSourceGroup: Send + Sync {
+pub trait InterruptSourceGroup: Send + Sync + Debug {
     /// Enable the interrupt sources in the group to generate interrupts.
     fn enable(&self) -> Result<()> {
         // Not all interrupt sources can be enabled.

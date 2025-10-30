@@ -155,6 +155,7 @@ impl TimesliceContext {
 // The main justification for this dedicated type is to split the thread
 // functions from the higher-level control API.
 // TODO seccomp is missing
+#[derive(Debug)]
 pub struct ThrottleWorker {
     handle: Option<JoinHandle<()>>,
 }
@@ -396,6 +397,7 @@ impl Drop for ThrottleWorker {
 /// - `Waiting` -> `Throttling(x %)`, `Exit`
 /// - `Throttling(x %)` -> `Exit`, `Waiting`, `Throttling(y %)`
 /// - `Exiting`
+#[derive(Debug)]
 pub struct ThrottleThreadHandle {
     /// Thread state wrapped by synchronization primitives.
     state_sender: mpsc::Sender<ThrottleCommand>,

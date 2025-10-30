@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+use core::fmt::Debug;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -524,6 +525,21 @@ impl Migratable for Vdpa {
     }
 }
 
+impl core::fmt::Debug for Vdpa {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Vdpa")
+            .field("common", &self.common)
+            .field("id", &self.id)
+            .field("vhost", &"Debug Missing")
+            .field("iova_range", &"Debug missing")
+            .field("enabled_queues", &self.enabled_queues)
+            .field("backend_features", &self.backend_features)
+            .field("migrating", &self.migrating)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
 pub struct VdpaDmaMapping<M: GuestAddressSpace> {
     device: Arc<Mutex<Vdpa>>,
     memory: Arc<M>,
@@ -535,7 +551,7 @@ impl<M: GuestAddressSpace> VdpaDmaMapping<M> {
     }
 }
 
-impl<M: GuestAddressSpace + Sync + Send> ExternalDmaMapping for VdpaDmaMapping<M> {
+impl<M: GuestAddressSpace + Sync + Send + Debug> ExternalDmaMapping for VdpaDmaMapping<M> {
     fn map(&self, iova: u64, gpa: u64, size: u64) -> result::Result<(), io::Error> {
         let mem = self.memory.memory();
         let guest_addr = GuestAddress(gpa);

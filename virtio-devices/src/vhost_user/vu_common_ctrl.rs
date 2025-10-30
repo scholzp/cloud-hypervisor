@@ -49,6 +49,15 @@ struct VringInfo {
     used_guest_addr: u64,
 }
 
+impl std::fmt::Debug for VringInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VringInfo")
+            .field("config_data", &"VringConfigData")
+            .field("used_guest_addr", &self.used_guest_addr)
+            .finish()
+    }
+}
+
 #[derive(Clone)]
 pub struct VhostUserHandle {
     vu: Frontend,
@@ -58,6 +67,20 @@ pub struct VhostUserHandle {
     acked_features: u64,
     vrings_info: Option<Vec<VringInfo>>,
     queue_indexes: Vec<usize>,
+}
+
+impl std::fmt::Debug for VhostUserHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VhostUserHandle")
+            .field("vu", &"Frontend")
+            .field("ready", &self.ready)
+            .field("supports_migration", &self.supports_migration)
+            .field("shm_log", &self.shm_log)
+            .field("acked_features", &self.acked_features)
+            .field("vrings_info", &self.vrings_info)
+            .field("queue_indexes", &self.queue_indexes)
+            .finish()
+    }
 }
 
 impl VhostUserHandle {

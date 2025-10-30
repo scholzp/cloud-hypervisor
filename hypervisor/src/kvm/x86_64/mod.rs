@@ -81,6 +81,29 @@ pub struct VcpuKvmState {
     pub nested_state: Option<KvmNestedStateBuffer>,
 }
 
+impl std::fmt::Debug for VcpuKvmState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut ds = f.debug_struct("VcpuKvmState");
+        ds.field("cpuid", &self.cpuid)
+            .field("msrs", &self.msrs)
+            .field("vcpu_events", &self.vcpu_events)
+            .field("regs", &self.regs)
+            .field("sregs", &self.sregs)
+            .field("fpu", &self.fpu)
+            .field("lapic_state", &self.lapic_state)
+            .field("xsave", &self.xsave)
+            .field("xcrs", &self.xcrs)
+            .field("mp_state", &self.mp_state)
+            .field("tsc_khz", &self.tsc_khz);
+        if let Some(_) = self.nested_state {
+            ds.field("nested_state", &"Some(KvmNestedStateBuffer)");
+        } else {
+            ds.field("nested_state", &"None");
+        }
+        ds.finish()
+    }
+}
+
 impl From<SegmentRegister> for kvm_segment {
     fn from(s: SegmentRegister) -> Self {
         Self {

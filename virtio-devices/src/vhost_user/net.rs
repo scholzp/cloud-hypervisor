@@ -47,6 +47,7 @@ pub struct State {
 struct BackendReqHandler {}
 impl VhostUserFrontendReqHandler for BackendReqHandler {}
 
+#[derive(Debug)]
 pub struct Net {
     common: VirtioCommon,
     vu_common: VhostUserCommon,

@@ -118,6 +118,7 @@ impl Drop for RateLimiterGroupHandle {
     }
 }
 
+#[derive(Debug)]
 struct RateLimiterGroupInner {
     id: String,
     rate_limiter: RateLimiter,
@@ -126,6 +127,7 @@ struct RateLimiterGroupInner {
 
 /// A RateLimiterGroup is an extension of RateLimiter that enables rate-limiting
 /// the aggregate io consumption of multiple consumers.
+#[derive(Debug)]
 pub struct RateLimiterGroup {
     inner: Arc<RateLimiterGroupInner>,
     epoll_file: File,

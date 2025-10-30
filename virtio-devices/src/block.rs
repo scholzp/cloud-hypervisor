@@ -99,7 +99,7 @@ pub type Result<T> = result::Result<T, Error>;
 
 // latency will be records as microseconds, average latency
 // will be save as scaled value.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BlockCounters {
     read_bytes: Arc<AtomicU64>,
     read_ops: Arc<AtomicU64>,
@@ -626,6 +626,7 @@ impl EpollHelperHandler for BlockEpollHandler {
 }
 
 /// Virtio device for exposing block level read/write operations on a host file.
+#[derive(Debug)]
 pub struct Block {
     common: VirtioCommon,
     id: String,

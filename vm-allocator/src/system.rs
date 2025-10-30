@@ -45,6 +45,7 @@ use crate::page_size::get_page_size;
 ///   assert_eq!(allocator.allocate_platform_mmio_addresses(None, 0x1000, Some(0x1000)), Some(GuestAddress(0x1fff_f000)));
 ///
 /// ```
+#[derive(Debug)]
 pub struct SystemAllocator {
     io_address_space: AddressAllocator,
     platform_mmio_address_space: AddressAllocator,

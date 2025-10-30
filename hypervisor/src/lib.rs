@@ -158,7 +158,7 @@ pub enum IoEventAddress {
     Mmio(u64),
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum CpuState {
     #[cfg(feature = "kvm")]
@@ -188,7 +188,7 @@ impl ClockData {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum IrqRoutingEntry {
     #[cfg(feature = "kvm")]
     Kvm(kvm_bindings::kvm_irq_routing_entry),

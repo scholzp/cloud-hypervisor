@@ -71,6 +71,7 @@ pub struct MsixConfigState {
     enabled: bool,
 }
 
+#[derive(Debug)]
 pub struct MsixConfig {
     pub table_entries: Vec<MsixTableEntry>,
     pub pba_entries: Vec<u64>,
@@ -460,7 +461,7 @@ impl Snapshottable for MsixConfig {
 
 #[allow(dead_code)]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Copy, Default, Serialize, Deserialize)]
 pub struct MsixCap {
     // Message Control Register
     //   10-0:  MSI-X Table size

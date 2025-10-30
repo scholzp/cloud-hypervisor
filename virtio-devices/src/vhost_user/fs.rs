@@ -45,7 +45,7 @@ impl VhostUserFrontendReqHandler for BackendReqHandler {}
 
 pub const VIRTIO_FS_TAG_LEN: usize = 36;
 #[serde_as]
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone, Serialize, Deserialize, Debug)]
 #[repr(C, packed)]
 pub struct VirtioFsConfig {
     #[serde_as(as = "Bytes")]
@@ -65,6 +65,7 @@ impl Default for VirtioFsConfig {
 // SAFETY: only a series of integers
 unsafe impl ByteValued for VirtioFsConfig {}
 
+#[derive(Debug)]
 pub struct Fs {
     common: VirtioCommon,
     vu_common: VhostUserCommon,

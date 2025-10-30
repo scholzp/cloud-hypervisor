@@ -12,7 +12,7 @@ use std::sync::{Arc, Barrier};
 use vm_device::BusDevice;
 
 /// Provides firmware debug output via I/O port controls
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct FwDebugDevice {}
 
 impl FwDebugDevice {

@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::io::Write;
 use std::num::Wrapping;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,20 +32,20 @@ pub enum VirtioInterruptType {
     Queue(u16),
 }
 
-pub trait VirtioInterrupt: Send + Sync {
+pub trait VirtioInterrupt: Send + Sync + Debug {
     fn trigger(&self, int_type: VirtioInterruptType) -> std::result::Result<(), std::io::Error>;
     fn notifier(&self, _int_type: VirtioInterruptType) -> Option<EventFd> {
         None
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VirtioSharedMemory {
     pub offset: u64,
     pub len: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VirtioSharedMemoryList {
     pub host_addr: u64,
     pub mem_slot: u32,
@@ -60,7 +61,7 @@ pub struct VirtioSharedMemoryList {
 /// and all the events, memory, and queues for device operation will be moved into the device.
 /// Optionally, a virtio device can implement device reset in which it returns said resources and
 /// resets its internal.
-pub trait VirtioDevice: Send {
+pub trait VirtioDevice: Send + Debug {
     /// The virtio device type.
     fn device_type(&self) -> u32;
 
@@ -184,7 +185,7 @@ pub trait DmaRemapping {
 }
 
 /// Structure to handle device state common to all devices
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct VirtioCommon {
     pub avail_features: u64,
     pub acked_features: u64,

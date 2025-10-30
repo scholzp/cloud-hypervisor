@@ -9,8 +9,9 @@
 // Copyright 2018-2019 CrowdStrike, Inc.
 //
 //
-
 use std::any::Any;
+use std::fmt::Debug;
+#[cfg(target_arch = "x86_64")]
 use std::sync::Arc;
 #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
 use std::sync::Mutex;
@@ -301,7 +302,7 @@ pub enum InterruptSourceConfig {
 ///
 /// This crate provides a hypervisor-agnostic interfaces for Vm
 ///
-pub trait Vm: Send + Sync + Any {
+pub trait Vm: Send + Sync + Any + Debug {
     #[cfg(target_arch = "x86_64")]
     /// Sets the address of the one-page region in the VM's address space.
     fn set_identity_map_address(&self, address: u64) -> Result<()>;
@@ -442,7 +443,7 @@ pub trait Vm: Send + Sync + Any {
     }
 }
 
-pub trait VmOps: Send + Sync {
+pub trait VmOps: Send + Sync + Debug {
     fn guest_mem_write(&self, gpa: u64, buf: &[u8]) -> Result<usize>;
     fn guest_mem_read(&self, gpa: u64, buf: &mut [u8]) -> Result<usize>;
     fn mmio_read(&self, gpa: u64, data: &mut [u8]) -> Result<()>;

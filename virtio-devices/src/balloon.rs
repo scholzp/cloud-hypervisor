@@ -419,7 +419,7 @@ impl EpollHelperHandler for BalloonEpollHandler {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct BalloonState {
     pub avail_features: u64,
     pub acked_features: u64,
@@ -427,6 +427,7 @@ pub struct BalloonState {
 }
 
 // Virtio device for exposing entropy to the guest OS through virtio.
+#[derive(Debug)]
 pub struct Balloon {
     common: VirtioCommon,
     id: String,

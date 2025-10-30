@@ -210,6 +210,7 @@ fn locality_from_addr(addr: u32) -> u8 {
     (addr >> 12) as u8
 }
 
+#[derive(Debug)]
 pub struct Tpm {
     emulator: Emulator,
     regs: [u32; TPM_CRB_R_MAX],

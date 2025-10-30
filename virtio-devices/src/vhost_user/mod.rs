@@ -291,7 +291,7 @@ impl<S: VhostUserFrontendReqHandler> EpollHelperHandler for VhostUserEpollHandle
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct VhostUserCommon {
     pub vu: Option<Arc<Mutex<VhostUserHandle>>>,
     pub acked_protocol_features: u64,

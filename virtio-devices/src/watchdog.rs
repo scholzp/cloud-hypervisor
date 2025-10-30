@@ -186,6 +186,7 @@ impl EpollHelperHandler for WatchdogEpollHandler {
 }
 
 /// Virtio device for exposing a watchdog to the guest
+#[derive(Debug)]
 pub struct Watchdog {
     common: VirtioCommon,
     id: String,

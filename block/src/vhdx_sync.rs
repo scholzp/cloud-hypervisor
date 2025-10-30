@@ -14,6 +14,7 @@ use crate::async_io::{
 };
 use crate::vhdx::{Result as VhdxResult, Vhdx};
 
+#[derive(Debug)]
 pub struct VhdxDiskSync {
     vhdx_file: Vhdx,
 }
@@ -43,6 +44,7 @@ impl DiskFile for VhdxDiskSync {
     }
 }
 
+#[derive(Debug)]
 pub struct VhdxSync {
     vhdx_file: Vhdx,
     eventfd: EventFd,

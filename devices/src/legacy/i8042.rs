@@ -12,6 +12,7 @@ use vm_device::BusDevice;
 use vmm_sys_util::eventfd::EventFd;
 
 /// A i8042 PS/2 controller that emulates just enough to shutdown the machine.
+#[derive(Debug)]
 pub struct I8042Device {
     reset_evt: EventFd,
     vcpus_kill_signalled: Arc<AtomicBool>,

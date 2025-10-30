@@ -94,6 +94,7 @@ use super::{ConnState, Error, PendingRx, PendingRxSet, Result, defs};
 /// A self-managing connection object, that handles communication between a guest-side AF_VSOCK
 /// socket and a host-side `Read + Write + AsRawFd` stream.
 ///
+#[derive(Debug)]
 pub struct VsockConnection<S: Read + Write + AsRawFd> {
     /// The current connection state.
     state: ConnState,

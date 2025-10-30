@@ -3,6 +3,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 
+use std::fmt::Debug;
+
 use std::{io, result};
 
 use thiserror::Error;
@@ -77,7 +79,7 @@ pub struct MsiMessage {
 // service provided for devices.
 // Device manager uses this trait without caring whether it is a
 // IOAPIC (X86), GIC (Arm) or AIA (RISC-V).
-pub trait InterruptController: Send {
+pub trait InterruptController: Send + Debug {
     fn service_irq(&mut self, irq: usize) -> Result<()>;
     #[cfg(target_arch = "x86_64")]
     fn end_of_interrupt(&mut self, vec: u8);

@@ -15,6 +15,7 @@ use crate::async_io::{
 };
 use crate::qcow::{QcowFile, RawFile, Result as QcowResult};
 
+#[derive(Debug)]
 pub struct QcowDiskSync {
     qcow_file: QcowFile,
 }
@@ -43,6 +44,7 @@ impl DiskFile for QcowDiskSync {
     }
 }
 
+#[derive(Debug)]
 pub struct QcowSync {
     qcow_file: QcowFile,
     eventfd: EventFd,

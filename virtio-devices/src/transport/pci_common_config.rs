@@ -120,6 +120,7 @@ pub fn get_vring_size(t: VringType, queue_size: u16) -> u64 {
 ///    le64 queue_desc;                // 0x20 // read-write
 ///    le64 queue_avail;               // 0x28 // read-write
 ///    le64 queue_used;                // 0x30 // read-write
+#[derive(Debug)]
 pub struct VirtioPciCommonConfig {
     pub access_platform: Option<Arc<dyn AccessPlatform>>,
     pub driver_status: u8,

@@ -279,6 +279,7 @@ pub enum BucketUpdate {
 /// RateLimiters will generate events on the FDs provided by their `AsRawFd` trait
 /// implementation. These events are meant to be consumed by the user of this struct.
 /// On each such event, the user must call the `event_handler()` method.
+#[derive(Debug)]
 pub struct RateLimiter {
     inner: Mutex<RateLimiterInner>,
 
@@ -286,6 +287,7 @@ pub struct RateLimiter {
     timer_active: AtomicBool,
 }
 
+#[derive(Debug)]
 struct RateLimiterInner {
     bandwidth: Option<TokenBucket>,
     ops: Option<TokenBucket>,

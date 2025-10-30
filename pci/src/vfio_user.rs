@@ -4,6 +4,7 @@
 //
 
 use std::any::Any;
+use std::fmt::Debug;
 use std::os::unix::prelude::AsRawFd;
 use std::ptr::null_mut;
 use std::sync::{Arc, Barrier, Mutex};
@@ -36,6 +37,18 @@ pub struct VfioUserPciDevice {
     client: Arc<Mutex<Client>>,
     common: VfioCommon,
     memory_slot_allocator: MemorySlotAllocator,
+}
+
+impl std::fmt::Debug for VfioUserPciDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VfioUserPciDevice")
+            .field("id", &self.id)
+            .field("vm", &self.vm)
+            .field("client", &"Client")
+            .field("common", &self.common)
+            .field("memory_slot_allocator", &self.memory_slot_allocator)
+            .finish()
+    }
 }
 
 #[derive(Error, Debug)]
@@ -302,6 +315,14 @@ struct VfioUserClientWrapper {
     client: Arc<Mutex<Client>>,
 }
 
+impl std::fmt::Debug for VfioUserClientWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VfioUserClientWrapper")
+            .field("client", &"Client")
+            .finish()
+    }
+}
+
 impl Vfio for VfioUserClientWrapper {
     fn region_read(&self, index: u32, offset: u64, data: &mut [u8]) {
         self.client
@@ -551,13 +572,28 @@ pub struct VfioUserDmaMapping<M: GuestAddressSpace> {
     memory: Arc<M>,
 }
 
+impl<M: GuestAddressSpace> std::fmt::Debug for VfioUserDmaMapping<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VfioUserDmaMapping")
+            .field("client", &"Client")
+            .field(
+                "memory",
+                &format!(
+                    "Address of GuestAddressSpace: {:x?}",
+                    Arc::as_ptr(&self.memory)
+                ),
+            )
+            .finish()
+    }
+}
+
 impl<M: GuestAddressSpace> VfioUserDmaMapping<M> {
     pub fn new(client: Arc<Mutex<Client>>, memory: Arc<M>) -> Self {
         Self { client, memory }
     }
 }
 
-impl<M: GuestAddressSpace + Sync + Send> ExternalDmaMapping for VfioUserDmaMapping<M> {
+impl<M: GuestAddressSpace + Sync + Send + Debug> ExternalDmaMapping for VfioUserDmaMapping<M> {
     fn map(&self, iova: u64, gpa: u64, size: u64) -> std::result::Result<(), std::io::Error> {
         let mem = self.memory.memory();
         let guest_addr = GuestAddress(gpa);

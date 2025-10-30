@@ -47,7 +47,7 @@ pub enum Error {
 
 pub const MSI_CONFIG_ID: &str = "msi_config";
 
-#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, Serialize, Deserialize, Debug)]
 pub struct MsiCap {
     // Message Control Register
     //   0:     MSI enable.
@@ -172,11 +172,12 @@ impl MsiCap {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MsiConfigState {
     cap: MsiCap,
 }
 
+#[derive(Debug)]
 pub struct MsiConfig {
     pub cap: MsiCap,
     interrupt_source_group: Arc<dyn InterruptSourceGroup>,

@@ -33,7 +33,7 @@ use super::{MuxerConnection, defs};
 
 /// A kill queue item, holding the connection key and the scheduled time for termination.
 ///
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct MuxerKillQItem {
     key: ConnMapKey,
     kill_time: Instant,
@@ -42,6 +42,7 @@ struct MuxerKillQItem {
 /// The connection kill queue: a FIFO structure, storing the connections that are scheduled for
 /// termination.
 ///
+#[derive(Debug)]
 pub struct MuxerKillQ {
     /// The kill queue contents.
     q: VecDeque<MuxerKillQItem>,

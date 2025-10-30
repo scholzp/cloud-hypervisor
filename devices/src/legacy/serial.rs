@@ -6,6 +6,7 @@
 // found in the LICENSE-BSD-3-Clause file.
 
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::sync::{Arc, Barrier};
 use std::{io, result};
 
@@ -53,10 +54,15 @@ const DEFAULT_MODEM_CONTROL: u8 = 0x8; // Auxiliary output 2
 const DEFAULT_MODEM_STATUS: u8 = 0x20 | 0x10 | 0x80; // data ready, clear to send, carrier detect
 const DEFAULT_BAUD_DIVISOR: u16 = 12; // 9600 bps
 
+/// Trait that specifies writers used by [`Serial`]
+pub trait SerialWriter: io::Write + Send + Debug {}
+impl<T> SerialWriter for T where T: io::Write + Send + Debug {}
+
 /// Emulates serial COM ports commonly seen on x86 I/O ports 0x3f8/0x2f8/0x3e8/0x2e8.
 ///
 /// This can optionally write the guest's output to a Write trait object. To send input to the
 /// guest, use `queue_input_bytes`.
+#[derive(Debug)]
 pub struct Serial {
     id: String,
     interrupt_enable: u8,
@@ -69,7 +75,7 @@ pub struct Serial {
     baud_divisor: u16,
     in_buffer: VecDeque<u8>,
     interrupt: Arc<dyn InterruptSourceGroup>,
-    out: Option<Box<dyn io::Write + Send>>,
+    out: Option<Box<dyn SerialWriter>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -89,7 +95,7 @@ impl Serial {
     pub fn new(
         id: String,
         interrupt: Arc<dyn InterruptSourceGroup>,
-        out: Option<Box<dyn io::Write + Send>>,
+        out: Option<Box<dyn SerialWriter>>,
         state: Option<SerialState>,
     ) -> Serial {
         let (
@@ -148,7 +154,7 @@ impl Serial {
     pub fn new_out(
         id: String,
         interrupt: Arc<dyn InterruptSourceGroup>,
-        out: Box<dyn io::Write + Send>,
+        out: Box<dyn SerialWriter>,
         state: Option<SerialState>,
     ) -> Serial {
         Self::new(id, interrupt, Some(out), state)
@@ -163,7 +169,7 @@ impl Serial {
         Self::new(id, interrupt, None, state)
     }
 
-    pub fn set_out(&mut self, out: Option<Box<dyn io::Write + Send>>) {
+    pub fn set_out(&mut self, out: Option<Box<dyn SerialWriter>>) {
         self.out = out;
     }
 

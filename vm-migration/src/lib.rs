@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 //
 
+use crate::protocol::MemoryRangeTable;
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 use thiserror::Error;
-
-use crate::protocol::MemoryRangeTable;
 
 pub mod protocol;
 
@@ -72,7 +72,7 @@ pub trait Pausable {
 /// separate sections.
 /// Splitting a component migration data into different sections
 /// allows for easier and forward compatible extensions.
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize, Debug)]
 pub struct SnapshotData {
     state: String,
 }
@@ -112,7 +112,7 @@ impl SnapshotData {
 /// but one Snapshot child per tracked device. Then each device's Snapshot
 /// would carry an empty snapshots map but a map of SnapshotData, i.e.
 /// the actual device snapshot data.
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize, Debug)]
 pub struct Snapshot {
     /// The Snapshottable component snapshots.
     pub snapshots: std::collections::BTreeMap<String, Snapshot>,
@@ -222,7 +222,7 @@ pub trait Transportable: Pausable + Snapshottable {
 /// and Snapshottable.
 /// Moreover a migratable component can be transported to a remote or local
 /// destination and thus must be Transportable.
-pub trait Migratable: Send + Pausable + Snapshottable + Transportable {
+pub trait Migratable: Send + Pausable + Snapshottable + Transportable + Debug {
     fn start_dirty_log(&mut self) -> std::result::Result<(), MigratableError> {
         Ok(())
     }

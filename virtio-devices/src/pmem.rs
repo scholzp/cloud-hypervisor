@@ -263,6 +263,7 @@ impl EpollHelperHandler for PmemEpollHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct Pmem {
     common: VirtioCommon,
     id: String,

@@ -24,6 +24,7 @@ use super::{MuxerConnection, defs};
 
 /// The muxer RX queue.
 ///
+#[derive(Debug)]
 pub struct MuxerRxQ {
     /// The RX queue data.
     q: VecDeque<MuxerRx>,

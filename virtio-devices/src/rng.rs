@@ -149,6 +149,7 @@ impl EpollHelperHandler for RngEpollHandler {
 }
 
 /// Virtio device for exposing entropy to the guest OS through virtio.
+#[derive(Debug)]
 pub struct Rng {
     common: VirtioCommon,
     id: String,

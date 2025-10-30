@@ -11,6 +11,7 @@ use super::{Error, Result, defs};
 /// data.  Memory for this buffer is allocated lazily, since buffering will only be needed when
 /// the host can't read fast enough.
 ///
+#[derive(Debug)]
 pub struct TxBuf {
     /// The actual u8 buffer - only allocated after the first push.
     data: Option<Box<[u8]>>,

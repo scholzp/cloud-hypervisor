@@ -334,7 +334,7 @@ impl Request {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct BlocksState {
     bitmap: Vec<bool>,
 }
@@ -676,7 +676,7 @@ impl EpollHelperHandler for MemEpollHandler {
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum VirtioMemMappingSource {
     Container,
     Device(u32),
@@ -690,6 +690,7 @@ pub struct MemState {
     pub blocks_state: BlocksState,
 }
 
+#[derive(Debug)]
 pub struct Mem {
     common: VirtioCommon,
     id: String,

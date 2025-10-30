@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 
@@ -55,7 +56,7 @@ impl AsRawFd for BorrowedDiskFd<'_> {
 ///
 /// This allows abstracting over raw image formats as well as structured
 /// image formats.
-pub trait DiskFile: Send {
+pub trait DiskFile: Send + Debug {
     fn size(&mut self) -> DiskFileResult<u64>;
     fn new_async_io(&self, ring_depth: u32) -> DiskFileResult<Box<dyn AsyncIo>>;
     fn topology(&mut self) -> DiskTopology {

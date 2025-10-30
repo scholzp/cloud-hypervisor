@@ -125,6 +125,8 @@ use crate::vm_config::{
     VhostMode, VmConfig, VsockConfig,
 };
 use crate::{DEVICE_MANAGER_SNAPSHOT_ID, GuestRegionMmap, PciDeviceInfo, device_node};
+use devices::debug_console::ConsoleWriter;
+use devices::legacy::SerialWriter;
 
 #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
 const MMIO_LEN: u64 = 0x1000;
@@ -673,7 +675,7 @@ pub type DeviceManagerResult<T> = result::Result<T, DeviceManagerError>;
 
 const DEVICE_MANAGER_ACPI_SIZE: usize = 0x10;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Console {
     console_resizer: Option<Arc<virtio_devices::ConsoleResizer>>,
 }
@@ -694,6 +696,7 @@ impl Console {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AddressManager {
     pub(crate) allocator: Arc<Mutex<SystemAllocator>>,
     pub(crate) io_bus: Arc<Bus>,
@@ -879,14 +882,14 @@ impl Clone for PtyPair {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum PciDeviceHandle {
     Vfio(Arc<Mutex<VfioPciDevice>>),
     Virtio(Arc<Mutex<VirtioPciDevice>>),
     VfioUser(Arc<Mutex<VfioUserPciDevice>>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct MetaVirtioDevice {
     virtio_device: Arc<Mutex<dyn virtio_devices::VirtioDevice>>,
     iommu: bool,
@@ -901,6 +904,33 @@ pub struct AcpiPlatformAddresses {
     pub reset_reg_address: Option<GenericAddress>,
     pub sleep_control_reg_address: Option<GenericAddress>,
     pub sleep_status_reg_address: Option<GenericAddress>,
+}
+
+impl std::fmt::Debug for AcpiPlatformAddresses {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut ds = f.debug_struct("AcpiPlatformAddresses");
+        if let Some(_addr) = self.pm_timer_address {
+            ds.field("pm_timer_address", &"Some(GenericAddress)");
+        } else {
+            ds.field("pm_timer_address", &"None");
+        }
+        if let Some(_addr) = self.reset_reg_address {
+            ds.field("reset_reg_address", &"Some(GenericAddress)");
+        } else {
+            ds.field("reset_reg_address", &"None");
+        }
+        if let Some(_addr) = self.sleep_control_reg_address {
+            ds.field("sleep_control_reg_address", &"Some(GenericAddress)");
+        } else {
+            ds.field("sleep_control_reg_address", &"None");
+        }
+        if let Some(_addr) = self.sleep_status_reg_address {
+            ds.field("sleep_status_reg_address", &"Some(GenericAddress)");
+        } else {
+            ds.field("sleep_status_reg_address", &"None");
+        }
+        ds.finish()
+    }
 }
 
 #[cfg(all(feature = "mshv", feature = "sev_snp"))]
@@ -1099,6 +1129,106 @@ pub struct DeviceManager {
     #[cfg(feature = "ivshmem")]
     // ivshmem device
     ivshmem_device: Option<Arc<Mutex<devices::IvshmemDevice>>>,
+}
+
+impl std::fmt::Debug for DeviceManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut dgb_strct = f.debug_struct("DeviceManager");
+        let container_string = match &self.vfio_container {
+            Some(a) => format!("VfioContainer ({:x?})", Arc::as_ptr(a)),
+            None => "None".to_owned(),
+        };
+        dgb_strct.field("address_manager", &self.address_manager)
+            .field("console", &self.console)
+            .field("serial_manager", &self.serial_manager)
+            .field("console_resize_pipe", &self.console_resize_pipe)
+            .field(
+                "original_termios_opt",
+                &self
+                    .original_termios_opt
+                    .lock()
+                    .unwrap()
+                    .and_then(|termios| {
+                        let mut result = format!(
+                            "termios: {{c_iflag: {:?}, c_oflag: {:?}, c_cflag: {:?}, c_lflag:{:?}, c_line: {:?}, c_cc: {:?}",
+                            termios.c_iflag,
+                            termios.c_oflag,
+                            termios.c_cflag,
+                            termios.c_lflag,
+                            termios.c_line,
+                            termios.c_cc,
+                        );
+                        #[cfg(not(any(
+                            target_arch = "sparc",
+                            target_arch = "sparc64",
+                            target_arch = "mips",
+                            target_arch = "mips32r6",
+                            target_arch = "mips64",
+                            target_arch = "mips64r6"
+                        )))] {
+                            result.push_str(&format!(", c_ispeed: {:?}, c_ospeed: {:?}", termios.c_ispeed, termios.c_ospeed));
+                        }
+                        result.push_str("}}");
+                        Some(result)
+                    }),
+            )
+            .field("interrupt_controller", &self.interrupt_controller)
+            .field("interrupt_controller", &self.interrupt_controller)
+            .field("interrupt_controller", &self.interrupt_controller)
+            .field("ged_notification_device", &self.ged_notification_device)
+            .field("config", &self.config)
+            .field("memory_manager", &self.memory_manager)
+            .field("cpu_manager", &self.cpu_manager)
+            .field("virtio_devices", &self.virtio_devices)
+            .field("block_devices", &self.block_devices)
+            .field("bus_devices", &self.bus_devices)
+            .field("device_id_cnt", &self.device_id_cnt)
+            .field("pci_segments", &self.pci_segments)
+            .field("passthrough_device", &self.passthrough_device)
+            .field("vfio_container", &container_string)
+            .field("iommu_device", &self.iommu_device)
+            .field("iommu_mapping", &self.iommu_mapping)
+            .field("iommu_attached_devices", &self.iommu_attached_devices)
+            .field("device_tree", &self.device_tree)
+            .field("exit_evt", &self.exit_evt)
+            .field("reset_evt", &self.reset_evt)
+            .field("seccomp_action", &self.seccomp_action)
+            .field("numa_nodes", &self.numa_nodes)
+            .field("balloon", &self.balloon)
+            .field("activate_evt", &self.activate_evt)
+            .field("selected_segment", &self.selected_segment)
+            .field("virtio_mem_devices", &self.virtio_mem_devices)
+            .field("pvpanic_device", &self.pvpanic_device)
+            .field("force_iommu", &self.force_iommu)
+            .field("io_uring_supported", &self.io_uring_supported)
+            .field("aio_supported", &self.aio_supported)
+            .field("boot_id_list", &self.boot_id_list)
+            .field("pending_activations", &self.pending_activations)
+            .field("snapshot", &self.snapshot)
+            .field("rate_limit_groups", &self.rate_limit_groups)
+            .field("mmio_regions", &self.mmio_regions);
+
+        #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+        dgb_strct.field("cmdline_additions", &self.cmdline_additions);
+        #[cfg_attr(target_arch = "aarch64", allow(dead_code))]
+        dgb_strct.field("msi_interrupt_manager", &self.msi_interrupt_manager);
+        #[cfg_attr(feature = "mshv", allow(dead_code))]
+        dgb_strct.field("legacy_interrupt_manager", &self.legacy_interrupt_manager);
+        #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+        dgb_strct.field("id_to_dev_info", &self.id_to_dev_info);
+        #[cfg(not(target_arch = "riscv64"))]
+        dgb_strct.field("acpi_address", &self.acpi_address);
+        #[cfg(target_arch = "aarch64")]
+        dgb_strct.field("gpio_device", &self.gpio_device);
+        #[cfg(feature = "pvmemcontrol")]
+        dgb_strct.field("pvmemcontrol_devices", &self.pvmemcontrol_devices);
+        #[cfg(not(target_arch = "riscv64"))]
+        dgb_strct.field("timestamp", &self.timestamp);
+        #[cfg(not(target_arch = "riscv64"))]
+        dgb_strct.field("acpi_platform_addresses", &self.acpi_platform_addresses);
+
+        dgb_strct.finish()
+    }
 }
 
 fn create_mmio_allocators(
@@ -2091,7 +2221,7 @@ impl DeviceManager {
     #[cfg(target_arch = "x86_64")]
     fn add_debug_console_device(
         &mut self,
-        debug_console_writer: Box<dyn io::Write + Send>,
+        debug_console_writer: Box<dyn ConsoleWriter>,
     ) -> DeviceManagerResult<Arc<Mutex<DebugConsole>>> {
         let id = String::from(DEBUGCON_DEVICE_NAME);
         let debug_console = Arc::new(Mutex::new(DebugConsole::new(
@@ -2139,7 +2269,7 @@ impl DeviceManager {
     fn add_serial_device(
         &mut self,
         interrupt_manager: &Arc<dyn InterruptManager<GroupConfig = LegacyIrqGroupConfig>>,
-        serial_writer: Option<Box<dyn io::Write + Send>>,
+        serial_writer: Option<Box<dyn SerialWriter>>,
     ) -> DeviceManagerResult<Arc<Mutex<Serial>>> {
         // Serial is tied to IRQ #4
         let serial_irq = 4;
@@ -2419,7 +2549,7 @@ impl DeviceManager {
         // SAFETY: console_info is Some, so it's safe to unwrap.
         let console_info = console_info.unwrap();
 
-        let serial_writer: Option<Box<dyn io::Write + Send>> = match console_info.serial_main_fd {
+        let serial_writer: Option<Box<dyn SerialWriter>> = match console_info.serial_main_fd {
             ConsoleOutput::File(ref file) | ConsoleOutput::Tty(ref file) => {
                 Some(Box::new(Arc::clone(file)))
             }
@@ -2462,7 +2592,7 @@ impl DeviceManager {
 
         #[cfg(target_arch = "x86_64")]
         {
-            let debug_console_writer: Option<Box<dyn io::Write + Send>> =
+            let debug_console_writer: Option<Box<dyn ConsoleWriter>> =
                 match console_info.debug_main_fd {
                     ConsoleOutput::File(file) | ConsoleOutput::Tty(file) => Some(Box::new(file)),
                     ConsoleOutput::Off

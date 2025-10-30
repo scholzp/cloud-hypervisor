@@ -125,6 +125,7 @@ fn decode_irq_from_selector(selector: u8) -> (usize, bool) {
     )
 }
 
+#[derive(Debug)]
 pub struct Ioapic {
     id: String,
     id_reg: u32,

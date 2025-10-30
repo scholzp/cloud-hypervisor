@@ -20,6 +20,7 @@ use vmm_sys_util::eventfd::EventFd;
 /// Reuse std::io::Result to simplify interoperability among crates.
 pub type Result<T> = std::io::Result<T>;
 
+#[derive(Debug)]
 struct InterruptRoute {
     gsi: u32,
     irq_fd: EventFd,
@@ -77,11 +78,13 @@ impl InterruptRoute {
     }
 }
 
+#[derive(Debug)]
 pub struct RoutingEntry {
     route: IrqRoutingEntry,
     masked: bool,
 }
 
+#[derive(Debug)]
 pub struct MsiInterruptGroup {
     vm: Arc<dyn hypervisor::Vm>,
     gsi_msi_routes: Arc<Mutex<HashMap<u32, RoutingEntry>>>,
@@ -202,6 +205,7 @@ impl InterruptSourceGroup for MsiInterruptGroup {
     }
 }
 
+#[derive(Debug)]
 pub struct LegacyUserspaceInterruptGroup {
     ioapic: Arc<Mutex<dyn InterruptController>>,
     irq: u32,
@@ -241,10 +245,12 @@ impl InterruptSourceGroup for LegacyUserspaceInterruptGroup {
     }
 }
 
+#[derive(Debug)]
 pub struct LegacyUserspaceInterruptManager {
     ioapic: Arc<Mutex<dyn InterruptController>>,
 }
 
+#[derive(Debug)]
 pub struct MsiInterruptManager {
     allocator: Arc<Mutex<SystemAllocator>>,
     vm: Arc<dyn hypervisor::Vm>,

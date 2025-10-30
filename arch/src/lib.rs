@@ -115,7 +115,7 @@ fn pagesize() -> usize {
     unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct NumaNode {
     pub memory_regions: Vec<Arc<GuestRegionMmap>>,
     pub hotplug_regions: Vec<Arc<GuestRegionMmap>>,

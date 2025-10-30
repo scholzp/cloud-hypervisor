@@ -10,6 +10,8 @@
 //
 //
 
+use core::fmt::Debug;
+
 #[cfg(feature = "kvm")]
 use std::os::fd::RawFd;
 #[cfg(target_arch = "aarch64")]
@@ -30,7 +32,7 @@ use crate::kvm::{TdxExitDetails, TdxExitStatus};
 use crate::{CpuState, MpState, StandardRegisters};
 
 #[cfg(target_arch = "x86_64")]
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Debug)]
 pub enum CpuVendor {
     #[default]
     Unknown,
@@ -363,7 +365,7 @@ pub type Result<T> = anyhow::Result<T, HypervisorCpuError>;
 ///
 /// Trait to represent a generic Vcpu
 ///
-pub trait Vcpu: Send + Sync {
+pub trait Vcpu: Send + Sync + Debug {
     ///
     /// Returns StandardRegisters with default value set
     ///

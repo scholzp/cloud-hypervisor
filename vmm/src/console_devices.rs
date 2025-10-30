@@ -60,7 +60,7 @@ pub enum ConsoleDeviceError {
 
 type ConsoleDeviceResult<T> = result::Result<T, ConsoleDeviceError>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ConsoleOutput {
     File(Arc<File>),
     Pty(Arc<File>),

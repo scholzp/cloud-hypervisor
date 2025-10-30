@@ -49,6 +49,7 @@ impl PciSubclass for PvPanicSubclass {
 }
 
 /// A device for handling guest panic event
+#[derive(Debug)]
 pub struct PvPanicDevice {
     id: String,
     events: u8,

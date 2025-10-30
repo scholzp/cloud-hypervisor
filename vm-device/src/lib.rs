@@ -60,7 +60,7 @@ pub enum Resource {
     KvmMemSlot(u32),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UserspaceMapping {
     pub host_addr: u64,
     pub mem_slot: u32,

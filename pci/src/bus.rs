@@ -51,6 +51,8 @@ pub enum PciRootError {
 pub type Result<T> = std::result::Result<T, PciRootError>;
 
 /// Emulates the PCI Root bridge device.
+
+#[derive(Debug)]
 pub struct PciRoot {
     /// Configuration space.
     config: PciConfiguration,
@@ -109,6 +111,7 @@ impl PciDevice for PciRoot {
     }
 }
 
+#[derive(Debug)]
 pub struct PciBus {
     /// Devices attached to this bus.
     /// Device 0 is host bridge.
@@ -200,6 +203,7 @@ impl PciBus {
     }
 }
 
+#[derive(Debug)]
 pub struct PciConfigIo {
     /// Config space register.
     config_address: u32,
@@ -348,6 +352,7 @@ impl BusDevice for PciConfigIo {
 }
 
 /// Emulates PCI memory-mapped configuration access mechanism.
+#[derive(Debug)]
 pub struct PciConfigMmio {
     pci_bus: Arc<Mutex<PciBus>>,
 }

@@ -12,7 +12,7 @@ use vm_migration::Migratable;
 
 use crate::device_manager::PciDeviceHandle;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct DeviceNode {
     pub id: String,
     pub resources: Vec<Resource>,
@@ -52,7 +52,7 @@ macro_rules! device_node {
     };
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize, Debug)]
 pub struct DeviceTree(HashMap<String, DeviceNode>);
 
 impl DeviceTree {

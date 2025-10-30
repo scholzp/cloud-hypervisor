@@ -22,6 +22,7 @@ const DATA_OFFSET: u64 = 0x1;
 const DATA_LEN: usize = 128;
 
 /// A CMOS/RTC device commonly seen on x86 I/O port 0x70/0x71.
+#[derive(Debug)]
 pub struct Cmos {
     index: u8,
     data: [u8; DATA_LEN],

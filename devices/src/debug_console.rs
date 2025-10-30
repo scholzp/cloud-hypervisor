@@ -5,6 +5,7 @@
 
 //! Module for [`DebugconState`].
 
+use std::fmt::Debug;
 use std::io;
 use std::io::Write;
 use std::sync::{Arc, Barrier};
@@ -15,8 +16,11 @@ use vm_migration::{Migratable, MigratableError, Pausable, Snapshot, Snapshottabl
 /// I/O-port.
 pub const DEFAULT_PORT: u64 = 0xe9;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DebugconState {}
+
+pub trait ConsoleWriter: Debug + io::Write + Send {}
+impl<T> ConsoleWriter for T where T: Debug + io::Write + Send {}
 
 /// Emulates a debug console similar to the QEMU debugcon device. This device
 /// is stateless and only prints the bytes (usually text) that are written to
@@ -27,13 +31,14 @@ pub struct DebugconState {}
 /// Reference:
 /// - https://github.com/qemu/qemu/blob/master/hw/char/debugcon.c
 /// - https://phip1611.de/blog/how-to-use-qemus-debugcon-feature-and-write-to-a-file/
+#[derive(Debug)]
 pub struct DebugConsole {
     id: String,
-    out: Box<dyn io::Write + Send>,
+    out: Box<dyn ConsoleWriter>,
 }
 
 impl DebugConsole {
-    pub fn new(id: String, out: Box<dyn io::Write + Send>) -> Self {
+    pub fn new(id: String, out: Box<dyn ConsoleWriter>) -> Self {
         Self { id, out }
     }
 }

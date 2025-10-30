@@ -74,7 +74,7 @@ const PLATFORM_DEVICE_AREA_SIZE: u64 = 1 << 20;
 
 const MAX_PREFAULT_THREAD_COUNT: usize = 16;
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize, Debug)]
 struct HotPlugState {
     base: u64,
     length: u64,
@@ -83,6 +83,7 @@ struct HotPlugState {
     removing: bool,
 }
 
+#[derive(Debug)]
 pub struct VirtioMemZone {
     region: Arc<GuestRegionMmap>,
     virtio_device: Option<Arc<Mutex<virtio_devices::Mem>>>,
@@ -115,7 +116,7 @@ impl VirtioMemZone {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct MemoryZone {
     regions: Vec<Arc<GuestRegionMmap>>,
     virtio_mem_zone: Option<VirtioMemZone>,
@@ -135,7 +136,7 @@ impl MemoryZone {
 
 pub type MemoryZones = HashMap<String, MemoryZone>;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct GuestRamMapping {
     slot: u32,
     gpa: u64,
@@ -145,13 +146,14 @@ struct GuestRamMapping {
     file_offset: u64,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct ArchMemRegion {
     base: u64,
     size: usize,
     r_type: RegionType,
 }
 
+#[derive(Debug)]
 pub struct MemoryManager {
     boot_guest_memory: GuestMemoryMmap,
     guest_memory: GuestMemoryAtomic<GuestMemoryMmap>,

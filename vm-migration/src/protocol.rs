@@ -215,13 +215,13 @@ impl Response {
 }
 
 #[repr(C)]
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize, Debug)]
 pub struct MemoryRange {
     pub gpa: u64,
     pub length: u64,
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize, Debug)]
 pub struct MemoryRangeTable {
     data: Vec<MemoryRange>,
 }

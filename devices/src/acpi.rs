@@ -19,6 +19,7 @@ use super::AcpiNotificationFlags;
 pub const GED_DEVICE_ACPI_SIZE: usize = 0x1;
 
 /// A device for handling ACPI shutdown and reboot
+#[derive(Debug)]
 pub struct AcpiShutdownDevice {
     exit_evt: EventFd,
     reset_evt: EventFd,
@@ -83,6 +84,7 @@ impl BusDevice for AcpiShutdownDevice {
 }
 
 /// A device for handling ACPI GED event generation
+#[derive(Debug)]
 pub struct AcpiGedDevice {
     interrupt: Arc<dyn InterruptSourceGroup>,
     notification_type: AcpiNotificationFlags,
@@ -217,6 +219,7 @@ impl Aml for AcpiGedDevice {
     }
 }
 
+#[derive(Debug)]
 pub struct AcpiPmTimerDevice {
     start: Instant,
 }

@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::{Arc, Barrier, Mutex};
 use std::{io, result};
 
@@ -43,7 +44,7 @@ pub struct BarReprogrammingParams {
     pub region_type: PciBarRegionType,
 }
 
-pub trait PciDevice: Send {
+pub trait PciDevice: Send + Debug {
     /// Allocates the needed PCI BARs space using the `allocate` function which takes a size and
     /// returns an address. Returns a Vec of (GuestAddress, GuestUsize) tuples.
     fn allocate_bars(
@@ -102,7 +103,7 @@ pub trait PciDevice: Send {
 
 /// This trait defines a set of functions which can be triggered whenever a
 /// PCI device is modified in any way.
-pub trait DeviceRelocation: Send + Sync {
+pub trait DeviceRelocation: Send + Sync + Debug {
     /// The BAR needs to be moved to a different location in the guest address
     /// space. This follows a decision from the software running in the guest.
     fn move_bar(

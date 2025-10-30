@@ -14,6 +14,7 @@ use crate::async_io::{
 use crate::fixed_vhd::FixedVhd;
 use crate::raw_sync::RawFileSync;
 
+#[derive(Debug)]
 pub struct FixedVhdDiskSync(FixedVhd);
 
 impl FixedVhdDiskSync {

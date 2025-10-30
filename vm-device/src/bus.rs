@@ -7,6 +7,8 @@
 
 //! Handles routing to devices in an address space.
 
+use core::fmt::Debug;
+
 use std::cmp::Ordering;
 use std::collections::btree_map::BTreeMap;
 use std::sync::{Arc, Barrier, Mutex, RwLock, Weak};
@@ -29,7 +31,7 @@ pub trait BusDevice: Send {
 }
 
 #[allow(unused_variables)]
-pub trait BusDeviceSync: Send + Sync {
+pub trait BusDeviceSync: Send + Sync + Debug {
     /// Reads at `offset` from this device
     fn read(&self, base: u64, offset: u64, data: &mut [u8]) {}
     /// Writes at `offset` into this device
@@ -38,7 +40,7 @@ pub trait BusDeviceSync: Send + Sync {
     }
 }
 
-impl<B: BusDevice> BusDeviceSync for Mutex<B> {
+impl<B: BusDevice + Debug> BusDeviceSync for Mutex<B> {
     /// Reads at `offset` from this device
     fn read(&self, base: u64, offset: u64, data: &mut [u8]) {
         self.lock()
@@ -115,7 +117,7 @@ impl PartialOrd for BusRange {
 ///
 /// This doesn't have any restrictions on what kind of device or address space this applies to. The
 /// only restriction is that no two devices can overlap in this address space.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Bus {
     devices: RwLock<BTreeMap<BusRange, Weak<dyn BusDeviceSync>>>,
 }

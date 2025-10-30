@@ -66,7 +66,7 @@ pub enum ConnState {
 /// (via `notify()`), the connection will store a `PendingRx::Rw` to be later inspected by
 /// `recv_pkt()`.
 ///
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PendingRx {
     /// We need to yield a connection request packet (VSOCK_OP_REQUEST).
     Request = 0,
@@ -89,6 +89,7 @@ impl PendingRx {
 
 /// A set of RX indications (`PendingRx` items).
 ///
+#[derive(Debug)]
 struct PendingRxSet {
     data: u16,
 }

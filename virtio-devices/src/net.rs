@@ -407,6 +407,7 @@ impl EpollHelperHandler for NetEpollHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct Net {
     common: VirtioCommon,
     id: String,

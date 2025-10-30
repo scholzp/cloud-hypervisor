@@ -22,13 +22,14 @@ pub enum Error {
 }
 type Result<T> = anyhow::Result<T, Error>;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 enum SocketDevState {
     Disconnected,
     Connecting,
     Connected,
 }
 
+#[derive(Debug)]
 pub struct SocketDev {
     state: SocketDevState,
     stream: Option<UnixStream>,

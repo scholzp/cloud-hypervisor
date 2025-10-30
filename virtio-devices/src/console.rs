@@ -106,7 +106,7 @@ struct ConsoleEpollHandler {
     file_event_registered: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Endpoint {
     File(Arc<File>),
     FilePair(Arc<File>, Arc<File>),
@@ -530,6 +530,7 @@ impl EpollHelperHandler for ConsoleEpollHandler {
 }
 
 /// Resize handler
+#[derive(Debug)]
 pub struct ConsoleResizer {
     config_evt: EventFd,
     tty: Option<File>,
@@ -562,6 +563,7 @@ impl VirtioConsoleConfig {
 }
 
 /// Virtio device for exposing console to the guest OS through virtio.
+#[derive(Debug)]
 pub struct Console {
     common: VirtioCommon,
     id: String,

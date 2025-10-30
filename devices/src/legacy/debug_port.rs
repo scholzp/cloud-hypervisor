@@ -50,6 +50,7 @@ impl fmt::Display for DebugIoPortRange {
     }
 }
 
+#[derive(Debug)]
 pub struct DebugPort {
     timestamp: Instant,
 }

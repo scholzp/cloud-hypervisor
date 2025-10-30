@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+use std::fmt::Debug;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Allocator for KVM memory slots
+#[derive(Debug)]
 pub struct MemorySlotAllocator {
     next_memory_slot: Arc<AtomicU32>,
     memory_slot_free_list: Arc<Mutex<Vec<u32>>>,

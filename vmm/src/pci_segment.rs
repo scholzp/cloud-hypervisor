@@ -22,6 +22,7 @@ use vm_device::BusDeviceSync;
 
 use crate::device_manager::{AddressManager, DeviceManagerError, DeviceManagerResult};
 
+#[derive(Debug)]
 pub(crate) struct PciSegment {
     pub(crate) id: u16,
     pub(crate) pci_bus: Arc<Mutex<PciBus>>,

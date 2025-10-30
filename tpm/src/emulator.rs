@@ -70,6 +70,7 @@ pub struct BackendCmd<'a> {
     pub input_len: usize,
 }
 
+#[derive(Debug)]
 pub struct Emulator {
     caps: PtmCap, /* capabilities of the TPM */
     control_socket: SocketDev,

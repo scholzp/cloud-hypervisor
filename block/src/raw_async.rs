@@ -14,6 +14,7 @@ use crate::async_io::{
 };
 use crate::{BatchRequest, DiskTopology, RequestType};
 
+#[derive(Debug)]
 pub struct RawFileDisk {
     file: File,
 }
@@ -240,5 +241,16 @@ impl AsyncIo for RawFileAsync {
         }
 
         Ok(())
+    }
+}
+
+impl core::fmt::Debug for RawFileAsync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params = self.io_uring.params();
+        f.debug_struct("RawFileAsync")
+            .field("fd", &self.fd)
+            .field("io_uring.params", &params)
+            .field("eventfd", &self.eventfd)
+            .finish_non_exhaustive()
     }
 }

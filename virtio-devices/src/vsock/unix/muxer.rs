@@ -75,6 +75,7 @@ pub enum MuxerRx {
 
 /// An epoll listener, registered under the muxer's nested epoll FD.
 ///
+#[derive(Debug)]
 enum EpollListener {
     /// The listener is a `MuxerConnection`, identified by `key`, and interested in the events
     /// in `evset`. Since `MuxerConnection` implements `VsockEpollListener`, notifications will
@@ -91,7 +92,7 @@ enum EpollListener {
 }
 
 /// A partially read "CONNECT" command.
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct PartiallyReadCommand {
     /// The bytes of the command that have been read so far.
     buf: [u8; 32],
@@ -101,6 +102,7 @@ struct PartiallyReadCommand {
 
 /// The vsock connection multiplexer.
 ///
+#[derive(Debug)]
 pub struct VsockMuxer {
     /// Guest CID.
     cid: u64,

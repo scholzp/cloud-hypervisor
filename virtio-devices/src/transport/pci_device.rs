@@ -6,6 +6,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 
+use core::fmt::Debug;
 use std::any::Any;
 use std::cmp;
 use std::io::Write;
@@ -61,7 +62,7 @@ const VIRTIO_PCI_CAP_OFFSET: usize = 2;
 
 #[allow(dead_code)]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct VirtioPciCap {
     cap_len: u8,      // Generic PCI field: capability length
     cfg_type: u8,     // Identifies the structure.
@@ -185,7 +186,7 @@ impl VirtioPciCap64 {
 
 #[allow(dead_code)]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct VirtioPciCfgCap {
     cap: VirtioPciCap,
     pci_cfg_data: [u8; 4],
@@ -212,7 +213,7 @@ impl VirtioPciCfgCap {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 struct VirtioPciCfgCapInfo {
     offset: usize,
     cap: VirtioPciCfgCap,
@@ -279,6 +280,7 @@ pub struct VirtioPciDeviceState {
     cap_pci_cfg: Vec<u8>,
 }
 
+#[derive(Debug)]
 pub struct VirtioPciDeviceActivator {
     interrupt: Option<Arc<dyn VirtioInterrupt>>,
     memory: Option<GuestMemoryAtomic<GuestMemoryMmap>>,
@@ -315,6 +317,7 @@ pub enum VirtioPciDeviceError {
 }
 pub type Result<T> = std::result::Result<T, VirtioPciDeviceError>;
 
+#[derive(Debug)]
 pub struct VirtioPciDevice {
     id: String,
 
@@ -841,6 +844,7 @@ impl VirtioTransport for VirtioPciDevice {
     }
 }
 
+#[derive(Debug)]
 pub struct VirtioInterruptMsix {
     msix_config: Arc<Mutex<MsixConfig>>,
     config_vector: Arc<AtomicU16>,

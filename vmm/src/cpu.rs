@@ -345,6 +345,7 @@ macro_rules! round_up {
 }
 
 /// A wrapper around creating and using a kvm-based VCPU.
+#[derive(Debug)]
 pub struct Vcpu {
     // The hypervisor abstracted CPU.
     vcpu: Arc<dyn hypervisor::Vcpu>,
@@ -526,6 +527,7 @@ impl Snapshottable for Vcpu {
     }
 }
 
+#[derive(Debug)]
 pub struct CpuManager {
     config: CpusConfig,
     #[cfg_attr(target_arch = "aarch64", allow(dead_code))]
@@ -644,7 +646,7 @@ impl BusDevice for CpuManager {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct VcpuState {
     inserting: bool,
     removing: bool,

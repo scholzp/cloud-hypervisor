@@ -8,18 +8,21 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use devices::legacy::SerialWriter;
+
 const MAX_BUFFER_SIZE: usize = 1 << 20;
 
 // Circular buffer implementation for serial output.
 // Read from head; push to tail
+#[derive(Debug)]
 pub struct SerialBuffer {
     buffer: VecDeque<u8>,
-    out: Box<dyn Write + Send>,
+    out: Box<dyn SerialWriter>,
     write_out: Arc<AtomicBool>,
 }
 
 impl SerialBuffer {
-    pub fn new(out: Box<dyn Write + Send>, write_out: Arc<AtomicBool>) -> Self {
+    pub fn new(out: Box<dyn SerialWriter>, write_out: Arc<AtomicBool>) -> Self {
         Self {
             buffer: VecDeque::new(),
             out,

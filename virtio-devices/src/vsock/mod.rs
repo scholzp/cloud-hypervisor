@@ -13,6 +13,8 @@ mod device;
 mod packet;
 mod unix;
 
+use core::fmt::Debug;
+
 use std::os::unix::io::RawFd;
 
 use packet::VsockPacket;
@@ -158,7 +160,7 @@ pub trait VsockChannel {
 /// It that needs to be sendable through a mpsc channel (the latter due to how `vmm::EpollContext` works).
 /// Currently, the only implementation we have is `crate::virtio::unix::muxer::VsockMuxer`, which
 /// translates guest-side vsock connections to host-side Unix domain socket connections.
-pub trait VsockBackend: VsockChannel + VsockEpollListener + Send {}
+pub trait VsockBackend: VsockChannel + VsockEpollListener + Send + Debug {}
 
 #[cfg(any(test, fuzzing))]
 pub mod tests {

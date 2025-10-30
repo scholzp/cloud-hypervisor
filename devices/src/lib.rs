@@ -40,6 +40,7 @@ pub use self::ivshmem::IvshmemDevice;
 pub use self::pvpanic::{PVPANIC_DEVICE_MMIO_SIZE, PvPanicDevice};
 
 bitflags! {
+    #[derive(Debug)]
     pub struct AcpiNotificationFlags: u8 {
         const NO_DEVICES_CHANGED = 0;
         const CPU_DEVICES_CHANGED = 0b1;

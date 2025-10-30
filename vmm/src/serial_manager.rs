@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
+use core::fmt::Debug;
 
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -20,6 +21,7 @@ use std::{io, result, thread};
 use devices::legacy::Pl011;
 #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
 use devices::legacy::Serial;
+use devices::legacy::SerialWriter;
 use libc::EFD_NONBLOCK;
 use serial_buffer::SerialBuffer;
 use thiserror::Error;
@@ -114,9 +116,9 @@ impl From<u64> for EpollDispatch {
 /// A thread-safe writer that fans out to multiple keyed writers. Allows for
 /// bundling different kinds of writers for the serial device, e.g. writing to
 /// a TCP socket and a file.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FanoutWriter {
-    writers: Arc<Mutex<HashMap<TypeId, Box<dyn Write + Send>>>>,
+    writers: Arc<Mutex<HashMap<TypeId, Box<dyn SerialWriter>>>>,
 }
 
 impl FanoutWriter {
@@ -126,12 +128,12 @@ impl FanoutWriter {
         }
     }
 
-    pub fn add_writer<W: Write + Send + 'static>(&self, writer: W) {
+    pub fn add_writer<W: SerialWriter + 'static>(&self, writer: W) {
         let mut writers = self.writers.lock().unwrap();
         writers.insert(TypeId::of::<W>(), Box::new(writer));
     }
 
-    pub fn remove_writer(&self, id: TypeId) -> Option<Box<dyn Write + Send>> {
+    pub fn remove_writer(&self, id: TypeId) -> Option<Box<dyn SerialWriter>> {
         let mut writers = self.writers.lock().unwrap();
         writers.remove(&id)
     }
@@ -163,6 +165,7 @@ impl Write for FanoutWriter {
     }
 }
 
+#[derive(Debug)]
 pub struct SerialManager {
     #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
     serial: Arc<Mutex<Serial>>,

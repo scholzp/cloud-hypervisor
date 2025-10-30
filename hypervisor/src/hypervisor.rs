@@ -8,6 +8,8 @@
 //
 //
 #[cfg(target_arch = "x86_64")]
+use core::fmt::Debug;
+
 use std::arch::x86_64;
 use std::sync::Arc;
 
@@ -101,7 +103,7 @@ pub type Result<T> = std::result::Result<T, HypervisorError>;
 ///
 /// This crate provides a hypervisor-agnostic interfaces
 ///
-pub trait Hypervisor: Send + Sync {
+pub trait Hypervisor: Send + Sync + Debug {
     ///
     /// Returns the type of the hypervisor
     ///

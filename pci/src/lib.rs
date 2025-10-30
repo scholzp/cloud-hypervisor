@@ -60,6 +60,7 @@ pub const PCI_CONFIG_IO_PORT_SIZE: u64 = 0x8;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd)]
 pub struct PciBdf(u32);
 
+#[derive(Debug)]
 struct PciBdfVisitor;
 
 impl Visitor<'_> for PciBdfVisitor {

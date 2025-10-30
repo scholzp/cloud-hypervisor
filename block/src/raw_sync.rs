@@ -14,6 +14,7 @@ use crate::async_io::{
     AsyncIo, AsyncIoError, AsyncIoResult, BorrowedDiskFd, DiskFile, DiskFileError, DiskFileResult,
 };
 
+#[derive(Debug)]
 pub struct RawFileDiskSync {
     file: File,
 }
@@ -49,6 +50,7 @@ impl DiskFile for RawFileDiskSync {
     }
 }
 
+#[derive(Debug)]
 pub struct RawFileSync {
     fd: RawFd,
     eventfd: EventFd,

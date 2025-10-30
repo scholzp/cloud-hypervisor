@@ -875,6 +875,7 @@ impl AccessPlatform for AccessPlatformMapping {
     }
 }
 
+#[derive(Debug)]
 pub struct Iommu {
     common: VirtioCommon,
     id: String,
@@ -889,7 +890,7 @@ pub struct Iommu {
 type EndpointsState = Vec<(u32, u32)>;
 type DomainsState = Vec<(u32, (Vec<(u64, Mapping)>, bool))>;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct IommuState {
     avail_features: u64,
     acked_features: u64,

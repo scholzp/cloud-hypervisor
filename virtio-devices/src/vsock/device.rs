@@ -8,6 +8,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the THIRD-PARTY file.
 
+use std::fmt::Debug;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -307,6 +308,7 @@ where
 }
 
 /// Virtio device exposing virtual socket to the guest.
+#[derive(Debug)]
 pub struct Vsock<B: VsockBackend> {
     common: VirtioCommon,
     id: String,
@@ -520,7 +522,7 @@ where
     }
 }
 impl<B> Transportable for Vsock<B> where B: VsockBackend + Sync + 'static {}
-impl<B> Migratable for Vsock<B> where B: VsockBackend + Sync + 'static {}
+impl<B> Migratable for Vsock<B> where B: VsockBackend + Sync + Debug + 'static {}
 
 #[cfg(test)]
 mod tests {

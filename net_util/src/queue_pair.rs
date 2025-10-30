@@ -341,7 +341,7 @@ impl Drop for IovecBufferBorrowed<'_> {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct NetCounters {
     pub tx_bytes: Arc<AtomicU64>,
     pub tx_frames: Arc<AtomicU64>,

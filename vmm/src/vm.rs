@@ -425,6 +425,7 @@ impl VmState {
     }
 }
 
+#[derive(Debug)]
 struct VmOpsHandler {
     memory: GuestMemoryAtomic<GuestMemoryMmap>,
     #[cfg(target_arch = "x86_64")]
@@ -500,6 +501,7 @@ pub fn physical_bits(hypervisor: &Arc<dyn hypervisor::Hypervisor>, max_phys_bits
     cmp::min(host_phys_bits, max_phys_bits)
 }
 
+#[derive(Debug)]
 pub struct Vm {
     #[cfg(feature = "tdx")]
     kernel: Option<File>,
