@@ -170,7 +170,7 @@ impl PciSegment {
             self.pci_bus
                 .lock()
                 .unwrap()
-                .next_device_id()
+                .allocate_device_id(None)
                 .map_err(DeviceManagerError::NextPciDeviceId)? as u8,
             0,
         ))
