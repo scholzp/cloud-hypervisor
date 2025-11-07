@@ -467,7 +467,7 @@ pub enum DeviceManagerError {
 
     /// Failed to find an available PCI device ID.
     #[error("Failed to find an available PCI device ID")]
-    NextPciDeviceId(#[source] pci::PciRootError),
+    AllocatePciDeviceId(#[source] pci::PciRootError),
 
     /// Could not reserve the PCI device ID.
     #[error("Could not reserve the PCI device ID")]
@@ -3464,7 +3464,7 @@ impl DeviceManager {
         let pci_segment_id = 0x0_u16;
 
         let (pci_segment_id, pci_device_bdf, resources) =
-            self.pci_resources(&id, pci_segment_id)?;
+            self.pci_resources(&id, pci_segment_id, None)?;
 
         info!("Creating pvmemcontrol device: id = {}", id);
         let (pvmemcontrol_pci_device, pvmemcontrol_bus_device) =
@@ -4315,7 +4315,8 @@ impl DeviceManager {
 
             (pci_segment_id, pci_device_bdf, resources)
         } else {
-            let pci_device_bdf = self.pci_segments[pci_segment_id as usize].next_device_bdf()?;
+            let pci_device_bdf =
+                self.pci_segments[pci_segment_id as usize].allocate_device_bdf(None)?;
 
             (pci_segment_id, pci_device_bdf, None)
         })

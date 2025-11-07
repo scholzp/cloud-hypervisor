@@ -169,8 +169,8 @@ impl PciBus {
     /// Allocates a PCI device ID on the bus.
     ///
     /// - `id`: ID to allocate on the bus. If [`None`], the next free
-    ///         device ID on the bus is allocated, else the ID given is
-    ///         allocated
+    ///   device ID on the bus is allocated, else the ID given is
+    ///   allocated
     ///
     /// ## Errors
     /// * Returns [`PciRootError::AlreadyInUsePciDeviceSlot`] in case
@@ -191,7 +191,7 @@ impl PciBus {
                     Err(PciRootError::AlreadyInUsePciDeviceSlot(id as usize))
                 }
             } else {
-                return Err(PciRootError::InvalidPciDeviceSlot(id as usize));
+                Err(PciRootError::InvalidPciDeviceSlot(id as usize))
             }
         } else {
             for (idx, device_id) in self.device_ids.iter_mut().enumerate() {
