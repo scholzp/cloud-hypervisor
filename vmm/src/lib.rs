@@ -2695,6 +2695,7 @@ mod unit_tests {
             rng: RngConfig {
                 src: PathBuf::from("/dev/urandom"),
                 iommu: false,
+                bdf_device_id: None,
             },
             balloon: None,
             fs: None,
