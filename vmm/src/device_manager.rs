@@ -917,6 +917,7 @@ struct MetaVirtioDevice {
     iommu: bool,
     id: String,
     pci_segment: u16,
+    bdf_device: Option<u8>,
     dma_handler: Option<Arc<dyn ExternalDmaMapping>>,
 }
 
@@ -2398,6 +2399,7 @@ impl DeviceManager {
             id: id.clone(),
             pci_segment: 0,
             dma_handler: None,
+            bdf_device: None,
         });
 
         // Fill the device tree with a new node. In case of restore, we
@@ -2898,6 +2900,7 @@ impl DeviceManager {
             id,
             pci_segment: disk_cfg.pci_segment,
             dma_handler: None,
+            bdf_device: None,
         })
     }
 
@@ -3068,6 +3071,7 @@ impl DeviceManager {
             id,
             pci_segment: net_cfg.pci_segment,
             dma_handler: None,
+            bdf_device: None,
         })
     }
 
@@ -3113,6 +3117,7 @@ impl DeviceManager {
                 id: id.clone(),
                 pci_segment: 0,
                 dma_handler: None,
+                bdf_device: None,
             });
 
             // Fill the device tree with a new node. In case of restore, we
@@ -3174,6 +3179,7 @@ impl DeviceManager {
                 id,
                 pci_segment: generic_vhost_user_cfg.pci_segment,
                 dma_handler: None,
+                bdf_device: None,
             })
         } else {
             Err(DeviceManagerError::NoGenericVhostUserSock)
@@ -3240,6 +3246,7 @@ impl DeviceManager {
                 id,
                 pci_segment: fs_cfg.pci_segment,
                 dma_handler: None,
+                bdf_device: None,
             })
         } else {
             Err(DeviceManagerError::NoVirtioFsSock)
@@ -3429,6 +3436,7 @@ impl DeviceManager {
             id,
             pci_segment: pmem_cfg.pci_segment,
             dma_handler: None,
+            bdf_device: None,
         })
     }
 
@@ -3500,6 +3508,7 @@ impl DeviceManager {
             id,
             pci_segment: vsock_cfg.pci_segment,
             dma_handler: None,
+            bdf_device: None,
         })
     }
 
@@ -3556,6 +3565,7 @@ impl DeviceManager {
                     id: memory_zone_id.clone(),
                     pci_segment: 0,
                     dma_handler: None,
+                    bdf_device: None,
                 });
 
                 // Fill the device tree with a new node. In case of restore, we
@@ -3643,6 +3653,7 @@ impl DeviceManager {
                 id: id.clone(),
                 pci_segment: 0,
                 dma_handler: None,
+                bdf_device: None,
             });
 
             self.device_tree
@@ -3682,6 +3693,7 @@ impl DeviceManager {
             id: id.clone(),
             pci_segment: 0,
             dma_handler: None,
+            bdf_device: None,
         });
 
         self.device_tree
@@ -3740,6 +3752,7 @@ impl DeviceManager {
             id,
             pci_segment: vdpa_cfg.pci_segment,
             dma_handler: Some(vdpa_mapping),
+            bdf_device: None,
         })
     }
 
