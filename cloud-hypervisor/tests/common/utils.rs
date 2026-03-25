@@ -1043,3 +1043,25 @@ pub(crate) fn make_guest_panic(guest: &Guest) {
     // Trigger guest a panic
     guest.ssh_command("screen -dmS reboot sh -c \"sleep 5; echo s | tee /proc/sysrq-trigger; echo c | sudo tee /proc/sysrq-trigger\"").unwrap();
 }
+
+/// Extracts a BDF from a CHV returned response
+pub(crate) fn extract_bdf_from_chv_answer(
+    s: &str,
+) -> (
+    u16, /* Segment ID */
+    u8,  /* Bus ID */
+    u8,  /* Device ID */
+    u8,  /* Function ID */
+) {
+    let bdf_key = "\"bdf\":";
+    let index = s.find(bdf_key).expect("should contain key `{bdf_key}`");
+    let bdf_string = s
+        .get((index + 7)..(index + 19))
+        .expect("should contain BDF");
+    let segment_id = bdf_string[0..4].parse::<u16>().unwrap();
+    let bus_id = bdf_string[5..7].parse::<u8>().unwrap();
+    let device_id = bdf_string[8..10].parse::<u8>().unwrap();
+    let function_id = bdf_string[11..12].parse::<u8>().unwrap();
+
+    (segment_id, bus_id, device_id, function_id)
+}
