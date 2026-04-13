@@ -1385,7 +1385,7 @@ impl DiskConfig {
             backing_files,
             sparse,
             image_type,
-            bdf_device,
+            pci_device_id: bdf_device,
         })
     }
 
@@ -1625,7 +1625,7 @@ impl NetConfig {
             offload_tso,
             offload_ufo,
             offload_csum,
-            bdf_device,
+            pci_device_id: bdf_device,
         };
         Ok(config)
     }
@@ -1721,7 +1721,7 @@ impl RngConfig {
         Ok(RngConfig {
             src,
             iommu,
-            bdf_device,
+            pci_device_id: bdf_device,
         })
     }
 }
@@ -1762,7 +1762,7 @@ impl BalloonConfig {
             size,
             deflate_on_oom,
             free_page_reporting,
-            bdf_device,
+            pci_device_id: bdf_device,
         })
     }
 }
@@ -1818,7 +1818,7 @@ impl FsConfig {
             queue_size,
             id,
             pci_segment,
-            bdf_device,
+            pci_device_id: bdf_device,
         })
     }
 
@@ -1993,7 +1993,7 @@ impl PmemConfig {
             discard_writes,
             id,
             pci_segment,
-            bdf_device,
+            pci_device_id: bdf_device,
         })
     }
 
@@ -2091,7 +2091,7 @@ impl ConsoleConfig {
             iommu,
             socket,
             url,
-            bdf_device,
+            pci_device_id: bdf_device,
         })
     }
 }
@@ -2298,7 +2298,7 @@ impl VdpaConfig {
             iommu,
             id,
             pci_segment,
-            bdf_device,
+            pci_device_id: bdf_device,
         })
     }
 
@@ -2365,7 +2365,7 @@ impl VsockConfig {
             iommu,
             id,
             pci_segment,
-            bdf_device,
+            pci_device_id: bdf_device,
         })
     }
 
@@ -3745,7 +3745,7 @@ mod unit_tests {
             backing_files: false,
             sparse: true,
             image_type: ImageType::Unknown,
-            bdf_device: None,
+            pci_device_id: None,
         }
     }
 
@@ -3844,7 +3844,7 @@ mod unit_tests {
         assert_eq!(
             DiskConfig::parse("path=/path/to_file,addr=15.0")?,
             DiskConfig {
-                bdf_device: Some(21),
+                pci_device_id: Some(21),
                 ..disk_fixture()
             }
         );
@@ -3872,7 +3872,7 @@ mod unit_tests {
             offload_tso: true,
             offload_ufo: true,
             offload_csum: true,
-            bdf_device: None,
+            pci_device_id: None,
         }
     }
 
@@ -3940,7 +3940,7 @@ mod unit_tests {
         assert_eq!(
             NetConfig::parse("mac=de:ad:be:ef:12:34,host_mac=12:34:de:ad:be:ef,addr=08.0")?,
             NetConfig {
-                bdf_device: Some(8),
+                pci_device_id: Some(8),
                 ..net_fixture()
             }
         );
@@ -3972,7 +3972,7 @@ mod unit_tests {
             RngConfig {
                 src: PathBuf::from("/dev/random"),
                 iommu: true,
-                bdf_device: None,
+                pci_device_id: None,
             }
         );
         assert_eq!(
@@ -3985,7 +3985,7 @@ mod unit_tests {
         assert_eq!(
             RngConfig::parse("addr=10.0")?,
             RngConfig {
-                bdf_device: Some(16),
+                pci_device_id: Some(16),
                 ..Default::default()
             }
         );
@@ -4000,7 +4000,7 @@ mod unit_tests {
             queue_size: 1024,
             id: None,
             pci_segment: 0,
-            bdf_device: None,
+            pci_device_id: None,
         }
     }
 
@@ -4023,7 +4023,7 @@ mod unit_tests {
         assert_eq!(
             FsConfig::parse("tag=mytag,socket=/tmp/sock,addr=0F.0")?,
             FsConfig {
-                bdf_device: Some(15),
+                pci_device_id: Some(15),
                 ..fs_fixture()
             }
         );
@@ -4039,7 +4039,7 @@ mod unit_tests {
             discard_writes: false,
             id: None,
             pci_segment: 0,
-            bdf_device: None,
+            pci_device_id: None,
         }
     }
 
@@ -4070,7 +4070,7 @@ mod unit_tests {
         assert_eq!(
             PmemConfig::parse("file=/tmp/pmem,size=128M,addr=1F.0")?,
             PmemConfig {
-                bdf_device: Some(31),
+                pci_device_id: Some(31),
                 ..pmem_fixture()
             }
         );
@@ -4090,7 +4090,7 @@ mod unit_tests {
                 file: None,
                 socket: None,
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             }
         );
         assert_eq!(
@@ -4101,7 +4101,7 @@ mod unit_tests {
                 file: None,
                 socket: None,
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             }
         );
         assert_eq!(
@@ -4112,7 +4112,7 @@ mod unit_tests {
                 file: None,
                 socket: None,
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             }
         );
         assert_eq!(
@@ -4123,7 +4123,7 @@ mod unit_tests {
                 file: None,
                 socket: None,
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             }
         );
         assert_eq!(
@@ -4134,7 +4134,7 @@ mod unit_tests {
                 file: Some(PathBuf::from("/tmp/console")),
                 socket: None,
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             }
         );
         assert_eq!(
@@ -4145,7 +4145,7 @@ mod unit_tests {
                 file: None,
                 socket: None,
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             }
         );
         assert_eq!(
@@ -4156,7 +4156,7 @@ mod unit_tests {
                 file: Some(PathBuf::from("/tmp/console")),
                 socket: None,
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             }
         );
         assert_eq!(
@@ -4167,7 +4167,7 @@ mod unit_tests {
                 file: None,
                 socket: Some(PathBuf::from("/tmp/serial.sock")),
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             }
         );
         Ok(())
@@ -4219,7 +4219,7 @@ mod unit_tests {
             iommu: false,
             id: None,
             pci_segment: 0,
-            bdf_device: None,
+            pci_device_id: None,
         }
     }
 
@@ -4239,7 +4239,7 @@ mod unit_tests {
         assert_eq!(
             VdpaConfig::parse("path=/dev/vhost-vdpa,addr=0A.0")?,
             VdpaConfig {
-                bdf_device: Some(10),
+                pci_device_id: Some(10),
                 ..vdpa_fixture()
             }
         );
@@ -4271,7 +4271,7 @@ mod unit_tests {
                 iommu: false,
                 id: None,
                 pci_segment: 0,
-                bdf_device: None,
+                pci_device_id: None,
             }
         );
         assert_eq!(
@@ -4282,7 +4282,7 @@ mod unit_tests {
                 iommu: true,
                 id: None,
                 pci_segment: 0,
-                bdf_device: None,
+                pci_device_id: None,
             }
         );
 
@@ -4294,7 +4294,7 @@ mod unit_tests {
                 iommu: true,
                 id: None,
                 pci_segment: 0,
-                bdf_device: Some(8),
+                pci_device_id: Some(8),
             }
         );
         Ok(())
@@ -4489,7 +4489,7 @@ mod unit_tests {
                     id: Some("net0".to_owned()),
                     num_queues: 2,
                     fds: Some(vec![-1, -1, -1, -1]),
-                    bdf_device: Some(15),
+                    pci_device_id: Some(15),
                     ..net_fixture()
                 },
                 NetConfig {
@@ -4670,7 +4670,7 @@ mod unit_tests {
             rng: RngConfig {
                 src: PathBuf::from("/dev/urandom"),
                 iommu: false,
-                bdf_device: None,
+                pci_device_id: None,
             },
             balloon: None,
             fs: None,
@@ -4681,7 +4681,7 @@ mod unit_tests {
                 iommu: false,
                 socket: None,
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             },
             console: ConsoleConfig {
                 file: None,
@@ -4689,7 +4689,7 @@ mod unit_tests {
                 iommu: false,
                 socket: None,
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             },
             #[cfg(target_arch = "x86_64")]
             debug_console: DebugConsoleConfig::default(),
@@ -5007,7 +5007,7 @@ mod unit_tests {
             id: None,
             iommu: true,
             pci_segment: 1,
-            bdf_device: None,
+            pci_device_id: None,
         });
         still_valid_config.validate().unwrap();
 
@@ -5084,7 +5084,7 @@ mod unit_tests {
             id: None,
             iommu: false,
             pci_segment: 1,
-            bdf_device: None,
+            pci_device_id: None,
         });
         assert_eq!(
             invalid_config.validate(),

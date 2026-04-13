@@ -909,7 +909,7 @@ struct MetaVirtioDevice {
     iommu: bool,
     id: String,
     pci_segment: u16,
-    bdf_device: Option<u8>,
+    pci_device_id: Option<u8>,
     dma_handler: Option<Arc<dyn ExternalDmaMapping>>,
 }
 
@@ -1663,7 +1663,7 @@ impl DeviceManager {
                     &handle.id,
                     handle.pci_segment,
                     handle.dma_handler,
-                    handle.bdf_device,
+                    handle.pci_device_id,
                 )?;
 
                 // Track device BDF for Generic Initiator support
@@ -2423,10 +2423,10 @@ impl DeviceManager {
             id: id.clone(),
             pci_segment: 0,
             dma_handler: None,
-            bdf_device: console_config.bdf_device,
+            pci_device_id: console_config.pci_device_id,
         };
 
-        if console_config.bdf_device.is_some() {
+        if console_config.pci_device_id.is_some() {
             self.virtio_devices.push_front(device);
         } else {
             self.virtio_devices.push_back(device);
@@ -2928,7 +2928,7 @@ impl DeviceManager {
             id,
             pci_segment: disk_cfg.pci_segment,
             dma_handler: None,
-            bdf_device: disk_cfg.bdf_device,
+            pci_device_id: disk_cfg.pci_device_id,
         })
     }
 
@@ -2937,7 +2937,7 @@ impl DeviceManager {
         if let Some(disk_list_cfg) = &mut block_devices {
             for disk_cfg in disk_list_cfg.iter_mut() {
                 let device = self.make_virtio_block_device(disk_cfg, false)?;
-                if disk_cfg.bdf_device.is_some() {
+                if disk_cfg.pci_device_id.is_some() {
                     self.virtio_devices.push_front(device);
                 } else {
                     self.virtio_devices.push_back(device);
@@ -3109,7 +3109,7 @@ impl DeviceManager {
             id,
             pci_segment: net_cfg.pci_segment,
             dma_handler: None,
-            bdf_device: net_cfg.bdf_device,
+            pci_device_id: net_cfg.pci_device_id,
         })
     }
 
@@ -3119,7 +3119,7 @@ impl DeviceManager {
         if let Some(net_list_cfg) = &mut net_devices {
             for net_cfg in net_list_cfg.iter_mut() {
                 let device = self.make_virtio_net_device(net_cfg)?;
-                if net_cfg.bdf_device.is_some() {
+                if net_cfg.pci_device_id.is_some() {
                     self.virtio_devices.push_front(device);
                 } else {
                     self.virtio_devices.push_back(device);
@@ -3159,9 +3159,9 @@ impl DeviceManager {
                 id: id.clone(),
                 pci_segment: 0,
                 dma_handler: None,
-                bdf_device: rng_config.bdf_device,
+                pci_device_id: rng_config.pci_device_id,
             };
-            if rng_config.bdf_device.is_some() {
+            if rng_config.pci_device_id.is_some() {
                 self.virtio_devices.push_front(device);
             } else {
                 self.virtio_devices.push_back(device);
@@ -3226,7 +3226,7 @@ impl DeviceManager {
                 id,
                 pci_segment: fs_cfg.pci_segment,
                 dma_handler: None,
-                bdf_device: fs_cfg.bdf_device,
+                pci_device_id: fs_cfg.pci_device_id,
             })
         } else {
             Err(DeviceManagerError::NoVirtioFsSock)
@@ -3238,7 +3238,7 @@ impl DeviceManager {
         if let Some(fs_list_cfg) = &mut fs_devices {
             for fs_cfg in fs_list_cfg.iter_mut() {
                 let device = self.make_virtio_fs_device(fs_cfg)?;
-                if fs_cfg.bdf_device.is_some() {
+                if fs_cfg.pci_device_id.is_some() {
                     self.virtio_devices.push_front(device);
                 } else {
                     self.virtio_devices.push_back(device);
@@ -3420,7 +3420,7 @@ impl DeviceManager {
             id,
             pci_segment: pmem_cfg.pci_segment,
             dma_handler: None,
-            bdf_device: pmem_cfg.bdf_device,
+            pci_device_id: pmem_cfg.pci_device_id,
         })
     }
 
@@ -3430,7 +3430,7 @@ impl DeviceManager {
         if let Some(pmem_list_cfg) = &mut pmem_devices {
             for pmem_cfg in pmem_list_cfg.iter_mut() {
                 let device = self.make_virtio_pmem_device(pmem_cfg)?;
-                if pmem_cfg.bdf_device.is_some() {
+                if pmem_cfg.pci_device_id.is_some() {
                     self.virtio_devices.push_front(device);
                 } else {
                     self.virtio_devices.push_back(device);
@@ -3496,7 +3496,7 @@ impl DeviceManager {
             id,
             pci_segment: vsock_cfg.pci_segment,
             dma_handler: None,
-            bdf_device: vsock_cfg.bdf_device,
+            pci_device_id: vsock_cfg.pci_device_id,
         })
     }
 
@@ -3504,7 +3504,7 @@ impl DeviceManager {
         let mut vsock = self.config.lock().unwrap().vsock.take();
         if let Some(vsock_cfg) = &mut vsock {
             let device = self.make_virtio_vsock_device(vsock_cfg)?;
-            if vsock_cfg.bdf_device.is_some() {
+            if vsock_cfg.pci_device_id.is_some() {
                 self.virtio_devices.push_front(device);
             } else {
                 self.virtio_devices.push_back(device);
@@ -3557,7 +3557,7 @@ impl DeviceManager {
                     id: memory_zone_id.clone(),
                     pci_segment: 0,
                     dma_handler: None,
-                    bdf_device: None,
+                    pci_device_id: None,
                 });
 
                 // Fill the device tree with a new node. In case of restore, we
@@ -3645,10 +3645,10 @@ impl DeviceManager {
                 id: id.clone(),
                 pci_segment: 0,
                 dma_handler: None,
-                bdf_device: balloon_config.bdf_device,
+                pci_device_id: balloon_config.pci_device_id,
             };
 
-            if balloon_config.bdf_device.is_some() {
+            if balloon_config.pci_device_id.is_some() {
                 self.virtio_devices.push_front(device);
             } else {
                 self.virtio_devices.push_back(device);
@@ -3691,7 +3691,7 @@ impl DeviceManager {
             id: id.clone(),
             pci_segment: 0,
             dma_handler: None,
-            bdf_device: None,
+            pci_device_id: None,
         });
 
         self.device_tree
@@ -3750,7 +3750,7 @@ impl DeviceManager {
             id,
             pci_segment: vdpa_cfg.pci_segment,
             dma_handler: Some(vdpa_mapping),
-            bdf_device: vdpa_cfg.bdf_device,
+            pci_device_id: vdpa_cfg.pci_device_id,
         })
     }
 
@@ -3760,7 +3760,7 @@ impl DeviceManager {
         if let Some(vdpa_list_cfg) = &mut vdpa_devices {
             for vdpa_cfg in vdpa_list_cfg.iter_mut() {
                 let device = self.make_vdpa_device(vdpa_cfg)?;
-                if vdpa_cfg.bdf_device.is_some() {
+                if vdpa_cfg.pci_device_id.is_some() {
                     self.virtio_devices.push_front(device);
                 } else {
                     self.virtio_devices.push_back(device);
@@ -4969,7 +4969,7 @@ impl DeviceManager {
             &handle.id,
             handle.pci_segment,
             handle.dma_handler,
-            handle.bdf_device,
+            handle.pci_device_id,
         )?;
 
         // Update the PCIU bitmap

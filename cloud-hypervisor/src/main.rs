@@ -1009,7 +1009,7 @@ mod unit_tests {
             rng: RngConfig {
                 src: PathBuf::from("/dev/urandom"),
                 iommu: false,
-                bdf_device: None,
+                pci_device_id: None,
             },
             balloon: None,
             fs: None,
@@ -1020,7 +1020,7 @@ mod unit_tests {
                 iommu: false,
                 socket: None,
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             },
             console: ConsoleConfig {
                 file: None,
@@ -1028,7 +1028,7 @@ mod unit_tests {
                 iommu: false,
                 socket: None,
                 url: None,
-                bdf_device: None,
+                pci_device_id: None,
             },
             #[cfg(target_arch = "x86_64")]
             debug_console: DebugConsoleConfig::default(),
