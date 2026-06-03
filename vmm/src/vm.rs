@@ -1173,6 +1173,7 @@ impl Vm {
         config: &Arc<Mutex<VmConfig>>,
         #[cfg(target_arch = "x86_64")] kvm_sev_snp_enabled: bool,
     ) -> Result<()> {
+        info!("FwCFg: Populate");
         let mut e820_option: Option<usize> = None;
         if fw_cfg_config.e820 {
             e820_option = Some(config.lock().unwrap().memory.size as usize);
@@ -1245,6 +1246,8 @@ impl Vm {
             let bootitems = device_manager.lock().unwrap().get_bootitems();
             for (index, boot_item) in bootitems.iter().enumerate() {
                 let cstring = std::ffi::CString::new(boot_item.as_str()).unwrap();
+                log::info!("BOOTORDER ITEM: {:?}", cstring);
+                log::info!("BOOTORDER ITEM AS BYTES: {:x?}", cstring.as_bytes());
                 if index == (bootitems.len() - 1) {
                     content.extend_from_slice(cstring.as_bytes_with_nul());
                 } else {
@@ -1252,6 +1255,7 @@ impl Vm {
                     content.extend_from_slice(std::ffi::CString::new("\n").unwrap().as_bytes());
                 }
             }
+            log::info!("FW_CONFIG BOOTORDER: {:x?}", content);
             let bootorder_item = FwCfgItem {
                 name: "bootorder".to_string(),
                 content: FwCfgContent::Bytes(content),

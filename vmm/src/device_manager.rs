@@ -1553,6 +1553,10 @@ impl DeviceManager {
         }
         self.legacy_interrupt_manager = Some(legacy_interrupt_manager);
 
+        for (k, v) in &self.boot_order {
+            info!("Generating boot entry {} for {}", k, v);
+        }
+
         self.make_virtio_devices(snapshot)?;
         self.add_pci_devices(snapshot)?;
 
@@ -4463,6 +4467,11 @@ impl DeviceManager {
         node.pci_bdf = Some(pci_device_bdf);
         node.pci_device_handle = Some(PciDeviceHandle::Virtio(virtio_pci_device));
         self.device_tree.lock().unwrap().insert(id.clone(), node);
+        info!(
+            "Add device node for device with ID {:?} with fw path: {:?}",
+            &node_id,
+            self.device_tree.lock().unwrap().fw_cfg_path_by_id(&node_id)
+        );
 
         #[cfg(feature = "fw_cfg")]
         {
@@ -5398,6 +5407,7 @@ impl DeviceManager {
         for k in &keys {
             result.push(self.boot_order.get(k).unwrap().clone());
         }
+        info!("{:?}", result);
         result
     }
 }
