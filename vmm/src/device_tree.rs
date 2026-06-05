@@ -7,10 +7,20 @@ use std::sync::{Arc, Mutex};
 
 use pci::PciBdf;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "fw_cfg")]
+use thiserror::Error;
 use vm_device::Resource;
 use vm_migration::Migratable;
 
 use crate::device_manager::PciDeviceHandle;
+
+#[cfg(feature = "fw_cfg")]
+#[derive(Debug, Error)]
+pub enum DeviceNodePathError {
+    /// Filesystem tag is missing
+    #[error("Can't create a open firmware device path from a device not attached to a bus")]
+    NoBusDevice,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DeviceNode {
@@ -35,6 +45,36 @@ impl DeviceNode {
             migratable,
             pci_bdf: None,
             pci_device_handle: None,
+        }
+    }
+
+    /// Returns the open firmware device path
+    ///
+    /// The open firmware path is used by Qemu in it's `fw_cfg` device to pass boot order hints
+    /// to EDK2/OVMF. [0]
+    ///
+    /// [0] https://github.com/tianocore/edk2/blob/2816ff0ab0d6505bf580aa8eec02cc2b89f04230/OvmfPkg/Library/QemuBootOrderLib/QemuBootOrderLib.c#L1222
+    #[cfg(feature = "fw_cfg")]
+    pub fn openfw_device_path(&self) -> Result<String, DeviceNodePathError> {
+        if let Some(handle) = &self.pci_device_handle {
+            if let PciDeviceHandle::Virtio(virtio_handle) = handle {
+                let virtio_device = virtio_handle.lock().unwrap();
+                let device_type = virtio_device.virtio_device().lock().unwrap().device_type();
+                if let Some(bdf) = self.pci_bdf {
+                    match device_type {
+                        0x2 /* VirtioBlk */ => {
+                            Ok(format!("/pci@i0cf8/scsi@{:x}/disk@0,0", bdf.device()))
+                        }
+                        _ => Ok(format!("/unknown")),
+                    }
+                } else {
+                    unreachable!("PCi devices should have a bdf!")
+                }
+            } else {
+                todo!("Called for non PCI device")
+            }
+        } else {
+            Err(DeviceNodePathError::NoBusDevice)
         }
     }
 }
@@ -101,6 +141,11 @@ impl DeviceTree {
         } else {
             None
         }
+    }
+
+    #[cfg(feature = "fw_cfg")]
+    pub fn fw_cfg_path_by_id(&self, id: &str) -> String {
+        self.get(id).unwrap().openfw_device_path().unwrap()
     }
 }
 
