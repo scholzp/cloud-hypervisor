@@ -63,8 +63,8 @@ use crate::migration_transport::{
 use crate::seccomp_filters::{Thread, get_seccomp_filter};
 use crate::vm::{Error as VmError, Vm, VmState};
 use crate::vm_config::{
-    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, NetConfig, PmemConfig,
-    UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
+    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, MemoryZoneConfig, NetConfig,
+    PmemConfig, UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
 };
 
 mod acpi;
@@ -2532,8 +2532,8 @@ impl RequestHandler for Vmm {
         receive_data_migration: VmReceiveMigrationData,
     ) -> result::Result<(), MigratableError> {
         info!(
-            "Receiving migration: receiver_url = {}",
-            receive_data_migration.receiver_url
+            "Receiving migration: receiver_url = {}, memory_zones={:?}",
+            receive_data_migration.receiver_url, &receive_data_migration.zones
         );
 
         let mut listener =
