@@ -356,6 +356,7 @@ impl FromStr for ByteSized {
 /// Ranges are supported with `-`: `"[0,2-4,6]"` produces `[0, 2, 3, 4, 6]`.
 /// The element type defaults to `u64`. Use e.g `IntegerList<u16>` to parse
 /// into a narrower type, which rejects values that do not fit.
+#[cfg_attr(test, derive(Debug))]
 pub struct IntegerList<T = u64>(pub Vec<T>);
 
 impl<T: Display> Display for IntegerList<T> {
@@ -810,13 +811,13 @@ mod unit_tests {
 
     #[test]
     fn test_integer_list_invalid_range() {
-        assert!(IntegerList::<u64>::from_str("[5-3]").is_err());
-        assert!(IntegerList::<u64>::from_str("[5-5]").is_err());
+        IntegerList::<u64>::from_str("[5-3]").unwrap_err();
+        IntegerList::<u64>::from_str("[5-5]").unwrap_err();
     }
 
     #[test]
     fn test_integer_list_too_many_dashes() {
-        assert!(IntegerList::<u64>::from_str("[1-2-3]").is_err());
+        IntegerList::<u64>::from_str("[1-2-3]").unwrap_err();
     }
 
     #[test]
@@ -826,8 +827,8 @@ mod unit_tests {
         assert_eq!(list.0, vec![1u16, 3, 4, 5]);
 
         // ... but rejects values that do not fit, rather than truncating.
-        assert!(IntegerList::<u16>::from_str("[65536]").is_err());
-        assert!(IntegerList::<u8>::from_str("[256]").is_err());
+        IntegerList::<u16>::from_str("[65536]").unwrap_err();
+        IntegerList::<u8>::from_str("[256]").unwrap_err();
     }
 
     #[test]
