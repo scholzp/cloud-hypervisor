@@ -505,10 +505,10 @@ impl<S: Parseable, T: TupleValue> Parseable for Tuple<S, T> {
                     if last_idx != 0 {
                         return Err(TupleError::InvalidValue((*tuple).to_string()));
                     }
-                    first_val = if tuple[last_idx..idx].is_empty() {
+                    first_val = if tuple[last_idx..idx].trim().is_empty() {
                         return Err(TupleError::EmptyKey((*tuple).to_string()));
                     } else {
-                        Some(&tuple[last_idx..idx])
+                        Some(tuple[last_idx..idx].trim())
                     };
                     last_idx = idx + 1;
                 }
@@ -519,7 +519,7 @@ impl<S: Parseable, T: TupleValue> Parseable for Tuple<S, T> {
             first_val.ok_or(TupleError::InvalidValue((*tuple).to_string()))?,
         )
         .map_err(|_| TupleError::InvalidValue(first_val.unwrap().to_owned()))?;
-        let item2: T = TupleValue::parse_value(&tuple[last_idx..])?;
+        let item2: T = TupleValue::parse_value(&tuple[last_idx..].trim())?;
         Ok(Tuple(item1, item2))
     }
 }
@@ -901,6 +901,41 @@ mod unit_tests {
             "Expected \"{:?}\"; got \"{e:?}\"",
             TupleError::EmptyKey(expected_value.to_string()),
         );
+    }
+
+    #[test]
+    fn test_tuple_ignore_whitespace_in_key() {
+        let t = Tuple::<String, u64>::from_str("foo @42").unwrap();
+        assert_eq!(t, Tuple("foo".to_string(), 42));
+
+        let t = Tuple::<u8, u64>::from_str(" 8 @42").unwrap();
+        assert_eq!(t, Tuple(8, 42));
+
+        let t = Tuple::<String, u64>::from_str("\"foo \"@42").unwrap();
+        assert_eq!(t, Tuple("foo ".to_string(), 42));
+
+        let expected_value = "  @42";
+        let e = Tuple::<String, u64>::from_str("  @42").unwrap_err();
+        assert!(
+            matches!(e, TupleError::EmptyKey(ref s) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            TupleError::EmptyKey(expected_value.to_string()),
+        );
+    }
+
+    #[test]
+    fn test_tuple_ignore_whitespace_in_value() {
+        let t = Tuple::<String, u64>::from_str("foo@ 42").unwrap();
+        assert_eq!(t, Tuple("foo".to_string(), 42));
+
+        let t = Tuple::<u8, u64>::from_str("8@42 ").unwrap();
+        assert_eq!(t, Tuple(8, 42));
+    }
+
+    #[test]
+    fn test_tuple_allow_quoted_empty_key() {
+        let t = Tuple::<String, u64>::from_str("\"\"@ 42").unwrap();
+        assert_eq!(t, Tuple("".to_string(), 42));
     }
 
     #[test]
