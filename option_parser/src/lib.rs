@@ -552,7 +552,7 @@ impl<S: Parseable, T: TupleValue> Parseable for TupleList<S, T> {
 /// A list of strings parsed from a bracket-enclosed, comma-separated string.
 ///
 /// The format is `[str1,str2,...]`. Brackets are optional.
-#[cfg_attr(test, derive(Debug))]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Default)]
 pub struct StringList(pub Vec<String>);
 
@@ -951,9 +951,27 @@ mod unit_tests {
     }
 
     #[test]
+    fn test_string_list_empty_list() {
+        let l = StringList::from_str("[]").unwrap();
+        assert_eq!(l, StringList(vec![String::new()]));
+    }
+
+    #[test]
     fn test_string_list_no_brackets() {
-        let list = StringList::from_str("foo,bar").unwrap();
-        assert_eq!(list.0, vec!["foo", "bar"]);
+        let list = StringList::from_str("foo,bar,").unwrap();
+        assert_eq!(list.0, vec!["foo", "bar", ""]);
+    }
+
+    #[test]
+    fn test_string_list_nested_brackets() {
+        let list = StringList::from_str("foo,[bar],").unwrap();
+        assert_eq!(list.0, vec!["foo", "[bar]", ""]);
+    }
+
+    #[test]
+    fn test_string_list_nested_quotes() {
+        let list = StringList::from_str("foo,\"[bar]\",").unwrap();
+        assert_eq!(list.0, vec!["foo", "\"[bar]\"", ""]);
     }
 
     #[test]
