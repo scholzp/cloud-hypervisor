@@ -552,13 +552,16 @@ impl<S: Parseable, T: TupleValue> Parseable for TupleList<S, T> {
 /// A list of strings parsed from a bracket-enclosed, comma-separated string.
 ///
 /// The format is `[str1,str2,...]`. Brackets are optional.
+#[cfg_attr(test, derive(Debug))]
 #[derive(Default)]
 pub struct StringList(pub Vec<String>);
 
 #[derive(Error, Debug)]
 pub enum StringListParseError {
-    #[error("Invalid value: {0}")]
-    InvalidValue(String),
+    #[error("Invalid value")]
+    InvalidValue(#[source] OptionParserError),
+    #[error("Enclosing brackets not balanced for input: {0}")]
+    UnbalancedOutsideBrackets(String),
 }
 
 fn dequote(s: &str) -> String {
@@ -597,12 +600,23 @@ impl Parseable for StringList {
     type Err = StringListParseError;
 
     fn from_str(s: &str) -> result::Result<Self, Self::Err> {
-        let string_list: Vec<String> =
-            split_commas(s.trim().trim_matches(|c| c == '[' || c == ']'))
-                .map_err(|_| StringListParseError::InvalidValue(s.to_owned()))?
-                .iter()
-                .map(|e| e.to_owned())
-                .collect();
+        let trimmed = s.trim();
+        let brackets_removed = if let Some(trimmed_front_bracket) = trimmed.strip_prefix('[') {
+            trimmed_front_bracket
+                .strip_suffix(']')
+                .ok_or_else(|| StringListParseError::UnbalancedOutsideBrackets((*s).to_string()))?
+        } else {
+            trimmed.strip_suffix(']').map_or(Ok(trimmed), |_| {
+                Err(StringListParseError::UnbalancedOutsideBrackets(
+                    (*s).to_string(),
+                ))
+            })?
+        };
+        let string_list: Vec<String> = split_commas(brackets_removed)
+            .map_err(StringListParseError::InvalidValue)?
+            .iter()
+            .map(|e| e.to_owned())
+            .collect();
 
         Ok(StringList(string_list))
     }
@@ -946,6 +960,37 @@ mod unit_tests {
     fn test_tuple_single_pair() {
         let t = Tuple::<String, u64>::from_str("foo@42").unwrap();
         assert_eq!(t, Tuple("foo".to_owned(), 42));
+    }
+
+    #[test]
+    fn test_string_list_unbalanced_outer_brackets() {
+        let expected_value = "[foo,bar";
+        let e = StringList::from_str("[foo,bar").unwrap_err();
+        assert!(
+            matches!(e, StringListParseError::UnbalancedOutsideBrackets(ref s) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            StringListParseError::UnbalancedOutsideBrackets(expected_value.to_string())
+        );
+        let expected_value = "foo,bar]";
+        let e = StringList::from_str("foo,bar]").unwrap_err();
+        assert!(
+            matches!(e, StringListParseError::UnbalancedOutsideBrackets(ref s) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            StringListParseError::UnbalancedOutsideBrackets(expected_value.to_string())
+        );
+    }
+
+    #[test]
+    fn test_string_list_invalid_value() {
+        let expected_value = "foo,b\"ar";
+        let e = StringList::from_str("[foo,b\"ar]").unwrap_err();
+        assert!(
+            matches!(e, StringListParseError::InvalidValue(OptionParserError::InvalidSyntax(ref s)) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            StringListParseError::InvalidValue(OptionParserError::InvalidSyntax(
+                expected_value.to_string()
+            ))
+        );
     }
 
     #[test]
