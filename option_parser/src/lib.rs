@@ -615,7 +615,7 @@ impl Parseable for StringList {
         let string_list: Vec<String> = split_commas(brackets_removed)
             .map_err(StringListParseError::InvalidValue)?
             .iter()
-            .map(|e| e.to_owned())
+            .map(|e| e.trim().to_owned())
             .collect();
 
         Ok(StringList(string_list))
@@ -954,6 +954,12 @@ mod unit_tests {
     fn test_string_list_no_brackets() {
         let list = StringList::from_str("foo,bar").unwrap();
         assert_eq!(list.0, vec!["foo", "bar"]);
+    }
+
+    #[test]
+    fn test_string_list_whitespace_removed() {
+        let list = StringList::from_str(" foo , bar, ").unwrap();
+        assert_eq!(list.0, vec!["foo", "bar", ""]);
     }
 
     #[test]
