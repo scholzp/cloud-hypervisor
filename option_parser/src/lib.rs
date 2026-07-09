@@ -378,6 +378,8 @@ impl<T: Display> Display for IntegerList<T> {
 pub enum IntegerListParseError {
     #[error("Invalid value: {0}")]
     InvalidValue(String),
+    #[error("Expected a single pair of enclosing brackets in input: {0}")]
+    UnbalancedOrNoOuterBrackets(String),
 }
 
 impl<T: TryFrom<u64>> Parseable for IntegerList<T> {
@@ -387,7 +389,9 @@ impl<T: TryFrom<u64>> Parseable for IntegerList<T> {
         let mut integer_list = Vec::new();
         let ranges_list: Vec<&str> = s
             .trim()
-            .trim_matches(|c| c == '[' || c == ']')
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .ok_or_else(|| IntegerListParseError::UnbalancedOrNoOuterBrackets(s.to_string()))?
             .split(',')
             .collect();
 
@@ -798,6 +802,38 @@ mod unit_tests {
     }
 
     #[test]
+    fn test_integer_list_invalid_brackets() {
+        let expected_value = "1,3,5]";
+        let e = IntegerList::<u64>::from_str("1,3,5]").unwrap_err();
+        assert!(
+            matches!(e, IntegerListParseError::UnbalancedOrNoOuterBrackets(ref s) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            IntegerListParseError::UnbalancedOrNoOuterBrackets(expected_value.to_string())
+        );
+        let expected_value = "[1,3,5";
+        let e = IntegerList::<u64>::from_str("[1,3,5").unwrap_err();
+        assert!(
+            matches!(e, IntegerListParseError::UnbalancedOrNoOuterBrackets(ref s) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            IntegerListParseError::UnbalancedOrNoOuterBrackets(expected_value.to_string())
+        );
+        let expected_value = "1,3,5";
+        let e = IntegerList::<u64>::from_str("1,3,5").unwrap_err();
+        assert!(
+            matches!(e, IntegerListParseError::UnbalancedOrNoOuterBrackets(ref s) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            IntegerListParseError::UnbalancedOrNoOuterBrackets(expected_value.to_string())
+        );
+        let expected_value = "[1";
+        let e = IntegerList::<u64>::from_str("[[1,3,5]").unwrap_err();
+        assert!(
+            matches!(e, IntegerListParseError::InvalidValue(ref s) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            IntegerListParseError::InvalidValue(expected_value.to_string())
+        );
+    }
+
+    #[test]
     fn test_integer_list_single_values() {
         let list = IntegerList::<u64>::from_str("[1,3,5]").unwrap();
         assert_eq!(list.0, vec![1, 3, 5]);
@@ -807,6 +843,17 @@ mod unit_tests {
     fn test_integer_list_ranges() {
         let list = IntegerList::<u64>::from_str("[0,2-4,7]").unwrap();
         assert_eq!(list.0, vec![0, 2, 3, 4, 7]);
+    }
+
+    #[test]
+    fn test_integer_list_invalid_element() {
+        let expected_value = "a";
+        let e = IntegerList::<u64>::from_str("[1,a,5]").unwrap_err();
+        assert!(
+            matches!(e, IntegerListParseError::InvalidValue(ref s) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            IntegerListParseError::InvalidValue(expected_value.to_string())
+        );
     }
 
     #[test]
