@@ -393,6 +393,7 @@ impl<T: TryFrom<u64>> Parseable for IntegerList<T> {
             .and_then(|s| s.strip_suffix(']'))
             .ok_or_else(|| IntegerListParseError::UnbalancedOrNoOuterBrackets(s.to_string()))?
             .split(',')
+            .map(|s| s.trim())
             .collect();
 
         for range in ranges_list.iter() {
@@ -846,6 +847,12 @@ mod unit_tests {
     }
 
     #[test]
+    fn test_integer_list_ignore_whitespace() {
+        let list = IntegerList::<u64>::from_str("[1, 3 , 5]").unwrap();
+        assert_eq!(list.0, vec![1, 3, 5]);
+    }
+
+    #[test]
     fn test_integer_list_invalid_element() {
         let expected_value = "a";
         let e = IntegerList::<u64>::from_str("[1,a,5]").unwrap_err();
@@ -963,6 +970,12 @@ mod unit_tests {
                 Tuple("d".to_owned(), vec![7, 8]),
             ])
         );
+    }
+
+    #[test]
+    fn test_tuple_list_whitespace_in_list_value() {
+        let t = TupleList::<String, Vec<u64>>::from_str("[a@[1, 2, 5 ,4]]").unwrap();
+        assert_eq!(t, TupleList(vec![Tuple("a".to_owned(), vec![1, 2, 5, 4]),]));
     }
 
     #[test]
