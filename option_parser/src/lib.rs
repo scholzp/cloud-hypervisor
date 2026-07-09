@@ -356,7 +356,7 @@ impl FromStr for ByteSized {
 /// Ranges are supported with `-`: `"[0,2-4,6]"` produces `[0, 2, 3, 4, 6]`.
 /// The element type defaults to `u64`. Use e.g `IntegerList<u16>` to parse
 /// into a narrower type, which rejects values that do not fit.
-#[cfg_attr(test, derive(Debug))]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct IntegerList<T = u64>(pub Vec<T>);
 
 impl<T: Display> Display for IntegerList<T> {
@@ -853,9 +853,42 @@ mod unit_tests {
     }
 
     #[test]
+    fn test_integer_list_whitespace_in_range() {
+        let expected_value = "1 ";
+        let e = IntegerList::<u64>::from_str("[1 - 5]").unwrap_err();
+        assert!(
+            matches!(e, IntegerListParseError::InvalidValue(ref s) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            IntegerListParseError::InvalidValue(expected_value.to_string())
+        );
+    }
+
+    #[test]
     fn test_integer_list_invalid_element() {
         let expected_value = "a";
         let e = IntegerList::<u64>::from_str("[1,a,5]").unwrap_err();
+        assert!(
+            matches!(e, IntegerListParseError::InvalidValue(ref s) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            IntegerListParseError::InvalidValue(expected_value.to_string())
+        );
+    }
+
+    #[test]
+    fn test_integer_list_empty_list() {
+        let expected_value = "";
+        let e = IntegerList::<u64>::from_str("[]").unwrap_err();
+        assert!(
+            matches!(e, IntegerListParseError::InvalidValue(ref s) if s == expected_value),
+            "Expected \"{:?}\"; got \"{e:?}\"",
+            IntegerListParseError::InvalidValue(expected_value.to_string())
+        );
+    }
+
+    #[test]
+    fn test_integer_list_empty_elements() {
+        let expected_value = "";
+        let e = IntegerList::<u64>::from_str("[,]").unwrap_err();
         assert!(
             matches!(e, IntegerListParseError::InvalidValue(ref s) if s == expected_value),
             "Expected \"{:?}\"; got \"{e:?}\"",
