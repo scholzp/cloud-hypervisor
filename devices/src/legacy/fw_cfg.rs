@@ -196,27 +196,35 @@ struct FwCfgDmaAccess {
     address_be: u64,
 }
 
-// https://github.com/torvalds/linux/blob/master/include/uapi/linux/qemu_fw_cfg.h#L67
+/// DMA access control bits
+///
+/// Qemu defines them as follows
+/// ```C
+/// #define FW_CFG_DMA_CTL_ERROR   0x01
+/// #define FW_CFG_DMA_CTL_READ    0x02
+/// #define FW_CFG_DMA_CTL_SKIP    0x04
+/// #define FW_CFG_DMA_CTL_SELECT  0x08
+/// #define FW_CFG_DMA_CTL_WRITE   0x10
+/// ```
+/// Sources:
+/// https://github.com/torvalds/linux/blob/master/include/uapi/linux/qemu_fw_cfg.h#L67
+/// https://github.com/qemu/qemu/blob/6e9a825c1d4e7b62d072e99a89ecd1a74c7f0d55/hw/nvram/fw_cfg.c#L52
 #[bitfield(u32)]
 struct AccessControl {
     // FW_CFG_DMA_CTL_ERROR = 0x01
     error: bool,
     // FW_CFG_DMA_CTL_READ = 0x02
     read: bool,
-    #[bits(1)]
-    _unused2: u8,
     // FW_CFG_DMA_CTL_SKIP = 0x04
     skip: bool,
-    #[bits(3)]
-    _unused3: u8,
-    // FW_CFG_DMA_CTL_ERROR = 0x08
+    // FW_CFG_DMA_CTL_SELECT = 0x08
     select: bool,
-    #[bits(7)]
-    _unused4: u8,
     // FW_CFG_DMA_CTL_WRITE = 0x10
     write: bool,
+    #[bits(11)]
+    _unused: u16,
     #[bits(16)]
-    _unused: u32,
+    selector: u16,
 }
 
 #[repr(C)]
@@ -1007,5 +1015,89 @@ mod unit_tests {
         fw_cfg.write(0, DMA_OFFSET + 4, &dma_hi);
         let _ = mem.read(&mut data, GuestAddress(code_address));
         assert_eq!(data, code);
+    }
+
+    #[test]
+    fn dma_access_control_bits_map_correctly() {
+        // No bits set
+        let ac = AccessControl(0x0000_0000);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.selector(), 0);
+
+        // only error bit is set
+        let ac = AccessControl(0x0000_0001);
+        assert_eq!(ac.error(), true);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0);
+
+        // only read bit is set
+        let ac = AccessControl(0x0000_0002);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), true);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0);
+
+        // only skip bit is set
+        let ac = AccessControl(0x0000_0004);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), true);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0);
+
+        // only select bit is set
+        let ac = AccessControl(0x0000_0008);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.select(), true);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0);
+
+        // only write bit is set
+        let ac = AccessControl(0x0000_0010);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.write(), true);
+        assert_eq!(ac.selector(), 0);
+
+        // only selector bits are set
+        let ac = AccessControl(0xACAC_0000);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0xACAC);
+
+        // all access bits and selector are set
+        let ac = AccessControl(0xACAC_001F);
+        assert_eq!(ac.error(), true);
+        assert_eq!(ac.read(), true);
+        assert_eq!(ac.skip(), true);
+        assert_eq!(ac.select(), true);
+        assert_eq!(ac.write(), true);
+        assert_eq!(ac.selector(), 0xACAC);
+
+        // Padding bits do not effect any other bits
+        let ac = AccessControl(0x000_FFE0);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0x0);
     }
 }
