@@ -617,7 +617,7 @@ impl FwCfg {
         };
         let control = AccessControl(u32::from_be(dma_access.control_be));
         if control.select() {
-            self.selector = control.select() as u16;
+            self.selector = control.selector();
         }
         let len = u32::from_be(dma_access.length_be);
         let addr = u64::from_be(dma_access.address_be);
