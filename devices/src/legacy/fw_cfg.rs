@@ -603,6 +603,7 @@ impl FwCfg {
 
     fn do_dma(&mut self) {
         let dma_address = self.dma_address;
+        self.dma_address = 0;
         let mut access = FwCfgDmaAccess::new_zeroed();
         let dma_access = match self
             .memory
@@ -817,14 +818,18 @@ impl BusDevice for FwCfg {
                 let mut buf = [0u8; 4];
                 buf[..size].copy_from_slice(&data[..size]);
                 let val = u32::from_be_bytes(buf);
-                self.dma_address &= 0xffff_ffff;
-                self.dma_address |= (val as u64) << 32;
+                // After each DMA operation `dma_address` is reset to 0. A write to the lower 32 bit
+                // triggers an operation. So when we write the upper 4 bytes the lower 4 will always
+                // be zero. We do not need to handle them here.
+                self.dma_address = (val as u64) << 32;
             }
             (PORT_FW_CFG_DMA_LO, 4) => {
                 let mut buf = [0u8; 4];
                 buf[..size].copy_from_slice(&data[..size]);
                 let val = u32::from_be_bytes(buf);
-                self.dma_address &= !0xffff_ffff;
+                // self.dma_address has either only set the upper 32 bit if we first wrote to the
+                // upper 4 byte or is zero if fw_cfg was reset or finished a DMA operation.
+                // So no need for masking.
                 self.dma_address |= val as u64;
                 self.do_dma();
             }
