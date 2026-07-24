@@ -1118,6 +1118,56 @@ mod unit_tests {
     }
 
     #[test]
+    fn test_dma_skip_bytes() {
+        let payload_gpa = GuestAddress(0x0000_2000_u64);
+        let dma_gpa = GuestAddress(0xFEEA_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_DMA_SIGNATURE.len(),
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new(),
+        )
+        .unwrap();
+
+        let mut data = [0u8; 4];
+        // Prepare to skip the first 4 bytes and ensure the offset is set accordingly
+        update_fw_cfg_dma_access(
+            &mem,
+            4,
+            payload_gpa,
+            dma_gpa,
+            AccessControl(0).with_skip(true),
+        )
+        .unwrap();
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        assert_eq!(fw_cfg.data_offset, 4);
+        // Check that the memory is still contains the initial value
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(data, [INIT_BYTE_VALUE; 4]);
+        // Check that the control field is reset to zero
+        let mut access = FwCfgDmaAccess::new_zeroed();
+        access.control_be = 0xFFFF_FFFF;
+        let _ = mem.read(access.as_mut_bytes(), dma_gpa);
+        assert_eq!(access.control_be, 0);
+
+        // Now read the last 4 bytes. This ensures a single read command doesn't reset the offset
+        update_fw_cfg_dma_access(
+            &mem,
+            4,
+            payload_gpa,
+            dma_gpa,
+            AccessControl(0).with_read(true),
+        )
+        .unwrap();
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the data read is the data expected
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa);
+        assert_eq!(data, FW_CFG_DMA_SIGNATURE[4..]);
+    }
+
+    #[test]
     fn dma_access_control_bits_map_correctly() {
         // No bits set
         let ac = AccessControl(0x0000_0000);
