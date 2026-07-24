@@ -863,6 +863,8 @@ mod unit_tests {
     #[cfg(target_arch = "aarch64")]
     const DMA_OFFSET: u64 = 16;
 
+    const INIT_BYTE_VALUE: u8 = 0xAC;
+
     #[test]
     fn test_signature() {
         let gm = GuestMemoryAtomic::new(
@@ -981,6 +983,10 @@ mod unit_tests {
         let mem: GuestMemoryMmap<AtomicBitmap> =
             GuestMemoryMmap::from_ranges(&[(payload_gpa, mem_size), (dma_gpa, mem_size)])
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        let init_data = vec![INIT_BYTE_VALUE; payload_len];
+        let _ = mem
+            .write(init_data.as_bytes(), payload_gpa)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
         // Create the fw_cfg device
         let fw_cfg = FwCfg::new(GuestMemoryAtomic::new(mem.clone()));
         // Create the FwCfgDmaAccess struct and place it in the guest memory on the given address
