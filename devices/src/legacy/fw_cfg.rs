@@ -974,11 +974,12 @@ mod unit_tests {
         payload_len: usize,
         payload_gpa: GuestAddress,
         dma_gpa: GuestAddress,
-    ) -> (GuestMemoryMmap<AtomicBitmap>, FwCfg) {
+    ) -> Result<(GuestMemoryMmap<AtomicBitmap>, FwCfg)> {
         let mem_size = 0x1000;
         // Create memory regions for the payload and the DmaAccess struct
         let mem: GuestMemoryMmap<AtomicBitmap> =
-            GuestMemoryMmap::from_ranges(&[(payload_gpa, mem_size), (dma_gpa, mem_size)]).unwrap();
+            GuestMemoryMmap::from_ranges(&[(payload_gpa, mem_size), (dma_gpa, mem_size)])
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
         // Create the fw_cfg device
         let fw_cfg = FwCfg::new(GuestMemoryAtomic::new(mem.clone()));
         // Create the FwCfgDmaAccess struct and place it in the guest memory on the given address
@@ -989,9 +990,11 @@ mod unit_tests {
             length_be: (payload_len as u32).to_be(),
             address_be: payload_gpa.0.to_be(),
         };
-        let _ = mem.write(access.as_mut_bytes(), dma_gpa);
+        let _ = mem
+            .write(access.as_mut_bytes(), dma_gpa)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
-        (mem.clone(), fw_cfg)
+        Ok((mem.clone(), fw_cfg))
     }
 
     #[test]
@@ -1001,7 +1004,7 @@ mod unit_tests {
         ];
         let payload_gpa = GuestAddress(0x1000);
         let dma_gpa = GuestAddress(0x2000);
-        let (mem, mut fw_cfg) = setup_fw_cfg_dma_read(payload.len(), payload_gpa, dma_gpa);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_read(payload.len(), payload_gpa, dma_gpa).unwrap();
 
         // Add the payload as FwCfg item
         let content = FwCfgContent::Bytes(payload.to_vec());
@@ -1029,7 +1032,7 @@ mod unit_tests {
         let payload_addr = GuestAddress(0x0000_2000_u64);
         let dma_32_bit = GuestAddress(0xFEEA_u64);
         let (mem, mut fw_cfg) =
-            setup_fw_cfg_dma_read(FW_CFG_DMA_SIGNATURE.len(), payload_addr, dma_32_bit);
+            setup_fw_cfg_dma_read(FW_CFG_DMA_SIGNATURE.len(), payload_addr, dma_32_bit).unwrap();
 
         // Ensure that the signature is not stored at the target location before we actually did DMA
         let _ = mem.read(data.as_mut_bytes(), payload_addr);
@@ -1054,7 +1057,7 @@ mod unit_tests {
         let payload_addr = GuestAddress(0x0000_2000_u64);
         let dma_64_bit = GuestAddress(0x1_ACAC_1CC0_u64);
         let (mem, mut fw_cfg) =
-            setup_fw_cfg_dma_read(FW_CFG_DMA_SIGNATURE.len(), payload_addr, dma_64_bit);
+            setup_fw_cfg_dma_read(FW_CFG_DMA_SIGNATURE.len(), payload_addr, dma_64_bit).unwrap();
 
         // Prepare the addresses to write into the DMA registers
         let address_bytes: [u8; 8] = dma_64_bit.0.to_be_bytes();
