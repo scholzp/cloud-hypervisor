@@ -968,12 +968,13 @@ mod unit_tests {
     }
 
     /// Creates a guest memory mapping and places `FwCfgDmaAccess` at the given address in the guest
-    /// memory.
-    /// The `FwCfgDmaAccess` will have the `read` access bit set.
-    fn setup_fw_cfg_dma_read(
+    /// memory. Payload GPA is initialized with a bytes sequence of 0xAC to ensure not accidental
+    /// zero writes happen
+    fn setup_fw_cfg_dma_with_access_control(
         payload_len: usize,
         payload_gpa: GuestAddress,
         dma_gpa: GuestAddress,
+        access_control: AccessControl,
     ) -> Result<(GuestMemoryMmap<AtomicBitmap>, FwCfg)> {
         let mem_size = 0x1000;
         // Create memory regions for the payload and the DmaAccess struct
@@ -983,18 +984,28 @@ mod unit_tests {
         // Create the fw_cfg device
         let fw_cfg = FwCfg::new(GuestMemoryAtomic::new(mem.clone()));
         // Create the FwCfgDmaAccess struct and place it in the guest memory on the given address
-        let mut access_control = AccessControl(0);
-        access_control.set_read(true);
-        let mut access = FwCfgDmaAccess {
+        update_fw_cfg_dma_access(&mem, payload_len, payload_gpa, dma_gpa, access_control)?;
+
+        Ok((mem, fw_cfg))
+    }
+
+    // helper to update the access control struct in guest memory
+    fn update_fw_cfg_dma_access(
+        guest_mem: &GuestMemoryMmap<AtomicBitmap>,
+        payload_len: usize,
+        payload_gpa: GuestAddress,
+        dma_gpa: GuestAddress,
+        access_control: AccessControl,
+    ) -> Result<()> {
+        let access = FwCfgDmaAccess {
             control_be: access_control.0.to_be(),
             length_be: (payload_len as u32).to_be(),
             address_be: payload_gpa.0.to_be(),
         };
-        let _ = mem
+        let _ = guest_mem
             .write(access.as_mut_bytes(), dma_gpa)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-
-        Ok((mem.clone(), fw_cfg))
+        Ok(())
     }
 
     #[test]
@@ -1004,7 +1015,13 @@ mod unit_tests {
         ];
         let payload_gpa = GuestAddress(0x1000);
         let dma_gpa = GuestAddress(0x2000);
-        let (mem, mut fw_cfg) = setup_fw_cfg_dma_read(payload.len(), payload_gpa, dma_gpa).unwrap();
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            payload.len(),
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
 
         // Add the payload as FwCfg item
         let content = FwCfgContent::Bytes(payload.to_vec());
@@ -1031,8 +1048,13 @@ mod unit_tests {
         let mut data = [0u8; 8];
         let payload_addr = GuestAddress(0x0000_2000_u64);
         let dma_32_bit = GuestAddress(0xFEEA_u64);
-        let (mem, mut fw_cfg) =
-            setup_fw_cfg_dma_read(FW_CFG_DMA_SIGNATURE.len(), payload_addr, dma_32_bit).unwrap();
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_DMA_SIGNATURE.len(),
+            payload_addr,
+            dma_32_bit,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
 
         // Ensure that the signature is not stored at the target location before we actually did DMA
         let _ = mem.read(data.as_mut_bytes(), payload_addr);
@@ -1056,8 +1078,13 @@ mod unit_tests {
     fn test_dma_64bit_address_handling() {
         let payload_addr = GuestAddress(0x0000_2000_u64);
         let dma_64_bit = GuestAddress(0x1_ACAC_1CC0_u64);
-        let (mem, mut fw_cfg) =
-            setup_fw_cfg_dma_read(FW_CFG_DMA_SIGNATURE.len(), payload_addr, dma_64_bit).unwrap();
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_DMA_SIGNATURE.len(),
+            payload_addr,
+            dma_64_bit,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
 
         // Prepare the addresses to write into the DMA registers
         let address_bytes: [u8; 8] = dma_64_bit.0.to_be_bytes();
