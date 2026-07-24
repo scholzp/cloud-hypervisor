@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-/// Cloud Hypervisor implementation of Qemu's fw_cfg spec
+/// Cloud Hypervisor implementation of QEMU's fw_cfg spec
 /// https://www.qemu.org/docs/master/specs/fw_cfg.html
 /// Linux kernel fw_cfg driver header
 /// https://github.com/torvalds/linux/blob/master/include/uapi/linux/qemu_fw_cfg.h
@@ -42,7 +42,7 @@ use vm_memory::{
     ByteValued, Bytes, GuestAddress, GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap,
 };
 use vmm_sys_util::sock_ctrl_msg::IntoIovec;
-use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 #[cfg(target_arch = "x86_64")]
 // https://github.com/project-oak/oak/tree/main/stage0_bin#memory-layout
@@ -188,17 +188,62 @@ pub struct FwCfg {
     memory: GuestMemoryAtomic<GuestMemoryMmap<AtomicBitmap>>,
 }
 
-#[repr(C)]
-#[derive(Debug, IntoBytes, FromBytes)]
+/// Representation of the FWCfgDmaAccess struct of QEMU with adapter functions.
+///
+/// The QEMU documentation defines the structure as follows:
+/// ```C
+/// typedef struct FWCfgDmaAccess {
+///    uint32_t control;
+///    uint32_t length;
+///    uint64_t address;
+/// } FWCfgDmaAccess;
+/// ```
+/// Each field of the structure is in big-endian format and control field is at the lowest address.
+///
+/// Our implementation uses the functions `from_be_bytes` and `to_be_bytes` for explicit conversion
+/// from/to BE wire format so we can work with each field without individual conversion to native
+/// endianness.
+#[derive(Debug, Default)]
 struct FwCfgDmaAccess {
-    control_be: u32,
-    length_be: u32,
-    address_be: u64,
+    control: AccessControl,
+    length: u32,
+    address: u64,
+}
+
+impl FwCfgDmaAccess {
+    // Wire size of the QEMU structure
+    const WIRE_SIZE: usize = 16;
+
+    /// Used to create a [`FwCfgDmaAccess`] from a bytes array containing data in big-endian format.
+    fn from_be_bytes(bytes: &[u8; FwCfgDmaAccess::WIRE_SIZE]) -> Self {
+        Self {
+            control: AccessControl(u32::from_be_bytes(bytes[0..4].try_into().expect(
+                "conversion of 4 random bytes should work and input is statically `[u8; 16]`",
+            ))),
+            length: u32::from_be_bytes(bytes[4..8].try_into().expect(
+                "conversion of 4 random bytes should work and input is statically `[u8; 16]`",
+            )),
+            address: u64::from_be_bytes(bytes[8..16].try_into().expect(
+                "conversion of 8 random bytes should work and input is statically `[u8; 16]`",
+            )),
+        }
+    }
+
+    /// Used to create a bytes array from [`FwCfgDmaAccess`]. Each field is transformed to BE
+    /// representation.
+    #[cfg(test)]
+    fn to_be_bytes(&self) -> [u8; FwCfgDmaAccess::WIRE_SIZE] {
+        let mut result = [0_u8; FwCfgDmaAccess::WIRE_SIZE];
+        result[0..4].copy_from_slice(&self.control.0.to_be_bytes());
+        result[4..8].copy_from_slice(&self.length.to_be_bytes());
+        result[8..16].copy_from_slice(&self.address.to_be_bytes());
+        result
+    }
 }
 
 /// DMA access control bits
 ///
-/// Qemu defines them as follows
+/// QEMU defines them as follows
 /// ```C
 /// #define FW_CFG_DMA_CTL_ERROR   0x01
 /// #define FW_CFG_DMA_CTL_READ    0x02
@@ -604,31 +649,33 @@ impl FwCfg {
     fn do_dma(&mut self) {
         let dma_address = self.dma_address;
         self.dma_address = 0;
-        let mut access = FwCfgDmaAccess::new_zeroed();
+        let mut dma_access_buf = [0_u8; FwCfgDmaAccess::WIRE_SIZE];
         let dma_access = match self
             .memory
             .memory()
-            .read(access.as_mut_bytes(), GuestAddress(dma_address))
+            .read(dma_access_buf.as_mut_bytes(), GuestAddress(dma_address))
         {
-            Ok(_) => access,
+            Ok(FwCfgDmaAccess::WIRE_SIZE) => FwCfgDmaAccess::from_be_bytes(&dma_access_buf),
+            Ok(n) => {
+                error!("fw_cfg: Read an invalid amount of bytes: 0x{n:x}");
+                return;
+            }
             Err(e) => {
                 error!("fw_cfg: invalid address of dma access {dma_address:#x}: {e:?}");
                 return;
             }
         };
-        let control = AccessControl(u32::from_be(dma_access.control_be));
+        let control = dma_access.control;
         if control.select() {
             self.selector = control.selector();
             self.data_offset = 0;
         }
-        let len = u32::from_be(dma_access.length_be);
-        let addr = u64::from_be(dma_access.address_be);
         let ret = if control.read() {
-            self.dma_read(self.selector, len, addr)
+            self.dma_read(self.selector, dma_access.length, dma_access.address)
         } else if control.write() {
             Err(ErrorKind::InvalidInput.into())
         } else if control.skip() {
-            self.data_offset += len;
+            self.data_offset += dma_access.length;
             Ok(())
         } else {
             // Every other operation is a no-op
@@ -639,10 +686,12 @@ impl FwCfg {
             error!("fw_cfg: dma operation {dma_access:x?}: {e:x?}");
             access_resp.set_error(true);
         }
-        if let Err(e) = self.memory.memory().write(
-            &access_resp.0.to_be_bytes(),
-            GuestAddress(dma_address + core::mem::offset_of!(FwCfgDmaAccess, control_be) as u64),
-        ) {
+        // Control field is defined to be on the lowest address, no offset calculation needed
+        if let Err(e) = self
+            .memory
+            .memory()
+            .write(&access_resp.0.to_be_bytes(), GuestAddress(dma_address))
+        {
             error!("fw_cfg: finishing dma: {e:?}");
         }
     }
@@ -1006,12 +1055,12 @@ mod unit_tests {
         access_control: AccessControl,
     ) -> Result<()> {
         let access = FwCfgDmaAccess {
-            control_be: access_control.0.to_be(),
-            length_be: (payload_len as u32).to_be(),
-            address_be: payload_gpa.0.to_be(),
+            control: access_control,
+            length: payload_len as u32,
+            address: payload_gpa.0,
         };
         let _ = guest_mem
-            .write(access.as_mut_bytes(), dma_gpa)
+            .write(&access.to_be_bytes(), dma_gpa)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
         Ok(())
     }
@@ -1071,10 +1120,13 @@ mod unit_tests {
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_32_bit.0 as u32).to_be_bytes());
         // Check that the control field is reset to zero
-        let mut access = FwCfgDmaAccess::new_zeroed();
-        access.control_be = 0xFFFF_FFFF;
-        let _ = mem.read(access.as_mut_bytes(), dma_32_bit);
-        assert_eq!(access.control_be, 0);
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_32_bit);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
         // Check that fw_cfg wrote the correct bytes to the destination GPA
         let _ = mem.read(data.as_mut_bytes(), payload_addr);
         assert_eq!(data, FW_CFG_DMA_SIGNATURE);
@@ -1108,10 +1160,13 @@ mod unit_tests {
         fw_cfg.write(0, DMA_OFFSET, &addr_hi_bytes);
         fw_cfg.write(0, DMA_OFFSET + 4, &addr_lo_bytes);
         // Check that the control field is reset to zero
-        let mut access = FwCfgDmaAccess::new_zeroed();
-        access.control_be = 0xFFFF_FFFF;
-        let _ = mem.read(access.as_mut_bytes(), dma_64_bit);
-        assert_eq!(access.control_be, 0);
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(access_buffer.as_mut_bytes(), dma_64_bit);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
         // Check that fw_cfg wrote the correct bytes to the destination GPA
         let _ = mem.read(data.as_mut_bytes(), payload_addr);
         assert_eq!(data, FW_CFG_DMA_SIGNATURE);
@@ -1149,10 +1204,13 @@ mod unit_tests {
         let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
         assert_eq!(data, [INIT_BYTE_VALUE; 4]);
         // Check that the control field is reset to zero
-        let mut access = FwCfgDmaAccess::new_zeroed();
-        access.control_be = 0xFFFF_FFFF;
-        let _ = mem.read(access.as_mut_bytes(), dma_gpa);
-        assert_eq!(access.control_be, 0);
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
 
         // Now read the last 4 bytes. This ensures a single read command doesn't reset the offset
         update_fw_cfg_dma_access(
@@ -1192,10 +1250,13 @@ mod unit_tests {
         assert_eq!(fw_cfg.selector, SELECTOR_INIT);
         // Check that the control field is reset to zero
         // This also means that the error bit must not be set
-        let mut access = FwCfgDmaAccess::new_zeroed();
-        access.control_be = 0xFFFF_FFFF;
-        let _ = mem.read(access.as_mut_bytes(), dma_gpa);
-        assert_eq!(access.control_be.as_bytes(), 0_u32.to_be_bytes());
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
         // Check that the memory is still contains the initial value
         let mut data = [0x0_u8; 8];
         let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
@@ -1220,10 +1281,13 @@ mod unit_tests {
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
         assert_eq!(fw_cfg.selector, 0x10);
         // Check that the control field is reset to zero
-        let mut access = FwCfgDmaAccess::new_zeroed();
-        access.control_be = 0xFFFF_FFFF;
-        let _ = mem.read(access.as_mut_bytes(), dma_gpa);
-        assert_eq!(access.control_be.as_bytes(), 0_u32.to_be_bytes());
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
         // Data offset has been reset
         assert_eq!(fw_cfg.data_offset, 0);
     }
@@ -1310,5 +1374,41 @@ mod unit_tests {
         assert_eq!(ac.select(), false);
         assert_eq!(ac.write(), false);
         assert_eq!(ac.selector(), 0x0);
+    }
+
+    #[test]
+    fn test_fw_cfg_dma_access_from_wire() {
+        let expected_control = 0x6767_6767_u32;
+        let expected_length = 0x8989_8989_u32;
+        let expected_address = 0xBCBC_BCBC_DEDE_DEDE_u64;
+
+        let mut buffer = [0_u8; FwCfgDmaAccess::WIRE_SIZE];
+        buffer[0..4].copy_from_slice(&expected_control.to_be_bytes());
+        buffer[4..8].copy_from_slice(&expected_length.to_be_bytes());
+        buffer[8..16].copy_from_slice(&expected_address.to_be_bytes());
+
+        let access = FwCfgDmaAccess::from_be_bytes(&buffer);
+        assert_eq!(access.control.0, expected_control);
+        assert_eq!(access.length, expected_length);
+        assert_eq!(access.address, expected_address);
+    }
+
+    #[test]
+    fn test_fw_cfg_dma_access_to_wire() {
+        let expected_control = 0x6767_6767_u32;
+        let expected_length = 0x8989_8989_u32;
+        let expected_address = 0xBCBC_BCBC_DEDE_DEDE_u64;
+
+        let access = FwCfgDmaAccess {
+            control: AccessControl(expected_control),
+            length: expected_length,
+            address: expected_address,
+        };
+
+        let mut buffer = [0_u8; FwCfgDmaAccess::WIRE_SIZE];
+        buffer.copy_from_slice(&access.to_be_bytes());
+        assert_eq!(buffer[0..4], expected_control.to_be_bytes());
+        assert_eq!(buffer[4..8], expected_length.to_be_bytes());
+        assert_eq!(buffer[8..16], expected_address.to_be_bytes());
     }
 }
