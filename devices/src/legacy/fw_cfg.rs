@@ -619,6 +619,7 @@ impl FwCfg {
         let control = AccessControl(u32::from_be(dma_access.control_be));
         if control.select() {
             self.selector = control.selector();
+            self.data_offset = 0;
         }
         let len = u32::from_be(dma_access.length_be);
         let addr = u64::from_be(dma_access.address_be);
@@ -1199,6 +1200,32 @@ mod unit_tests {
         let mut data = [0x0_u8; 8];
         let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
         assert_eq!(data, [INIT_BYTE_VALUE; 8]);
+    }
+
+    #[test]
+    fn test_dma_select_through_selector_field_works() {
+        let payload_gpa = GuestAddress(0x0000_2000_u64);
+        let dma_gpa = GuestAddress(0xFEEA_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_DMA_SIGNATURE.len(),
+            payload_gpa,
+            dma_gpa,
+            AccessControl(0).with_select(true).with_selector(0x10),
+        )
+        .unwrap();
+        // After initialization the selector field must be 0
+        assert_eq!(fw_cfg.selector, 0);
+        fw_cfg.data_offset = 0x10;
+        // Do DMA access only setting the selector field
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        assert_eq!(fw_cfg.selector, 0x10);
+        // Check that the control field is reset to zero
+        let mut access = FwCfgDmaAccess::new_zeroed();
+        access.control_be = 0xFFFF_FFFF;
+        let _ = mem.read(access.as_mut_bytes(), dma_gpa);
+        assert_eq!(access.control_be.as_bytes(), 0_u32.to_be_bytes());
+        // Data offset has been reset
+        assert_eq!(fw_cfg.data_offset, 0);
     }
 
     #[test]
