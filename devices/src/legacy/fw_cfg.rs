@@ -630,7 +630,8 @@ impl FwCfg {
             self.data_offset += len;
             Ok(())
         } else {
-            Err(ErrorKind::InvalidData.into())
+            // Every other operation is a no-op
+            Ok(())
         };
         let mut access_resp = AccessControl(0);
         if let Err(e) = ret {
@@ -1165,6 +1166,39 @@ mod unit_tests {
         // Check that the data read is the data expected
         let _ = mem.read(data.as_mut_bytes(), payload_gpa);
         assert_eq!(data, FW_CFG_DMA_SIGNATURE[4..]);
+    }
+
+    #[test]
+    fn test_dma_no_control_bits_is_valid_no_op() {
+        const OFFSET_INIT: u32 = 0x1234_5678_u32;
+        const SELECTOR_INIT: u16 = 0xABCD_u16;
+        let payload_gpa = GuestAddress(0x0000_2000_u64);
+        let dma_gpa = GuestAddress(0xFEEA_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_DMA_SIGNATURE.len(),
+            payload_gpa,
+            dma_gpa,
+            AccessControl(0).with_selector(0xABCD),
+        )
+        .unwrap();
+        // Write some data in the FwCfg register to verify none is overwritten
+        fw_cfg.data_offset = OFFSET_INIT;
+        fw_cfg.selector = SELECTOR_INIT;
+        // Do DMA access with no operation bit set -> should result in no-op
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that fw_cfg state didn't change
+        assert_eq!(fw_cfg.data_offset, OFFSET_INIT);
+        assert_eq!(fw_cfg.selector, SELECTOR_INIT);
+        // Check that the control field is reset to zero
+        // This also means that the error bit must not be set
+        let mut access = FwCfgDmaAccess::new_zeroed();
+        access.control_be = 0xFFFF_FFFF;
+        let _ = mem.read(access.as_mut_bytes(), dma_gpa);
+        assert_eq!(access.control_be.as_bytes(), 0_u32.to_be_bytes());
+        // Check that the memory is still contains the initial value
+        let mut data = [0x0_u8; 8];
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(data, [INIT_BYTE_VALUE; 8]);
     }
 
     #[test]
