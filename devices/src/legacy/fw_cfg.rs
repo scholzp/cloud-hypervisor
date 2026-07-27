@@ -658,6 +658,13 @@ impl FwCfg {
             Ok(FwCfgDmaAccess::WIRE_SIZE) => FwCfgDmaAccess::from_be_bytes(&dma_access_buf),
             Ok(n) => {
                 error!("fw_cfg: Read an invalid amount of bytes: 0x{n:x}");
+                // If QEMU cannot read the entire access descriptor it tries to write at least the
+                // control field with the error bit set. We do the same by discarding the write
+                // result and returning afterwards.
+                let _ = self.memory.memory().write(
+                    &AccessControl(0).with_error(true).0.to_be_bytes(),
+                    GuestAddress(dma_address),
+                );
                 return;
             }
             Err(e) => {
@@ -1410,5 +1417,37 @@ mod unit_tests {
         assert_eq!(buffer[0..4], expected_control.to_be_bytes());
         assert_eq!(buffer[4..8], expected_length.to_be_bytes());
         assert_eq!(buffer[8..16], expected_address.to_be_bytes());
+    }
+
+    #[test]
+    fn test_dma_boundary_crossing_dma_access_structure_triggers_error() {
+        // We test the case that the address for the FwCfgDmaAccess structure
+        // points to the last 4 bytes of a writable guest memory region. So
+        // reading the whole 16-byte structure fails but writing the control
+        // field still is possible.
+        let payload_addr = GuestAddress(0x0000_2000_u64);
+        let dma_32_bit = GuestAddress(0x4000_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_DMA_SIGNATURE.len(),
+            payload_addr,
+            dma_32_bit,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        // Perform DMA by calling `BusDevice` functions
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(0x5000_u32 - 4).to_be_bytes());
+        let mut access_buffer = [0_u8; 16];
+        // Only read 4 bytes at the end of the guest memory
+        let bytes_read = mem
+            .read(&mut access_buffer, GuestAddress(0x5000_u64 - 4))
+            .unwrap();
+        assert_eq!(bytes_read, 4_usize);
+        // Check that the control field is reset to with only the error bit set
+        assert_eq!(
+            FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0,
+            0x1_u32
+        );
     }
 }
