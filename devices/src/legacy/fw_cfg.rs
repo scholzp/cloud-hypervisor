@@ -1571,4 +1571,44 @@ mod unit_tests {
         assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
         assert_eq!(fw_cfg.data_offset as usize, FW_CFG_DMA_SIGNATURE.len());
     }
+
+    #[test]
+    fn test_dma_read_invalid_selector() {
+        // If we encounter an invalid selector we expect fw_cfg to successfully override the entire
+        // guest buffer with 0 and return success.
+        const DATA_BUFFER_LEN: usize = FwCfg::BUFFER_SIZE;
+        const CANARY_VALUE: u8 = 0xCC;
+        let payload_gpa = GuestAddress(0x2000_u64);
+        let dma_gpa = GuestAddress(0x4000_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            DATA_BUFFER_LEN, /* Defines the DMA read length */
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        let mut data = [CANARY_VALUE; 0x1000];
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[255 as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the item was read and remaining bytes set to 0
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(data[..DATA_BUFFER_LEN], [0; DATA_BUFFER_LEN]);
+        // Check that fw_cfg didn't touch any bytes behind the specified range
+        assert_eq!(
+            data[DATA_BUFFER_LEN..],
+            [INIT_BYTE_VALUE; 0x1000 - DATA_BUFFER_LEN]
+        );
+        assert_eq!(fw_cfg.data_offset, 0);
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+        assert_eq!(fw_cfg.data_offset, 0);
+    }
 }
