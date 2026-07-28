@@ -1041,7 +1041,7 @@ mod unit_tests {
         let mem: GuestMemoryMmap<AtomicBitmap> =
             GuestMemoryMmap::from_ranges(&[(payload_gpa, mem_size), (dma_gpa, mem_size)])
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-        let init_data = vec![INIT_BYTE_VALUE; payload_len];
+        let init_data = vec![INIT_BYTE_VALUE; mem_size];
         let _ = mem
             .write(init_data.as_bytes(), payload_gpa)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
