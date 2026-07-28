@@ -667,11 +667,20 @@ impl FwCfg {
             let guest_bytes_to_write = usize::min(Self::BUFFER_SIZE, (len as usize) - bytes_copied);
             let r = self.memory.memory().write(
                 &buf.as_bytes()[..guest_bytes_to_write],
-                GuestAddress(address.saturating_add(bytes_copied as u64)),
+                GuestAddress(
+                    address
+                        .checked_add(bytes_copied as u64)
+                        .ok_or(std::io::Error::from(ErrorKind::InvalidInput))?,
+                ),
             );
             bytes_copied += match r {
                 Err(e) => {
                     error!("fw_cfg: dma read error: {e:x?}");
+                    Err::<usize, std::io::Error>(ErrorKind::InvalidInput.into())
+                }
+                // We wrote less bytes than expected, so we reached a guest memory boundary. We
+                // abort and indicate this.
+                Ok(size) if size != guest_bytes_to_write => {
                     Err::<usize, std::io::Error>(ErrorKind::InvalidInput.into())
                 }
                 Ok(size) => Ok(size),
@@ -1610,5 +1619,56 @@ mod unit_tests {
         let _ = mem.read(&mut access_buffer, dma_gpa);
         assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
         assert_eq!(fw_cfg.data_offset, 0);
+    }
+
+    #[test]
+    fn test_dma_read_exceeds_guest_mem() {
+        const DATA_BUFFER_LEN: usize = FwCfg::BUFFER_SIZE;
+        const CANARY_VALUE: u8 = 0xCC;
+        let payload_gpa_start = GuestAddress(0x2000_u64);
+        let dma_gpa = GuestAddress(0x4000_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            0x1000, /* Defines the DMA read length */
+            payload_gpa_start,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+        // Move the address of the DMA target to the middle of the allocated page. We will be able
+        // to write the first half of the page but not the second half.
+        let payload_gpa = GuestAddress(payload_gpa_start.0.checked_add(0xD00).unwrap());
+        update_fw_cfg_dma_access(
+            &mem,
+            DATA_BUFFER_LEN,
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        let mut data = [CANARY_VALUE; 0x1000];
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the item was read and remaining bytes set to 0
+        let l = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(l, 0x1000 - 0xd00);
+        assert_eq!(data[0..FW_CFG_DMA_SIGNATURE.len()], FW_CFG_DMA_SIGNATURE);
+        assert_eq!(
+            data[FW_CFG_DMA_SIGNATURE.len()..0x1000 - 0xd00],
+            [0; 0x1000 - 0xd00 - FW_CFG_DMA_SIGNATURE.len()]
+        );
+        assert_eq!(fw_cfg.data_offset, 8);
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(
+            FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0,
+            AccessControl(0).with_error(true).0
+        );
     }
 }
