@@ -993,11 +993,23 @@ impl BusDevice for FwCfg {
                 self.read_data(data, size as u32);
             }
             (PORT_FW_CFG_DATA, 1) => _ = self.read_data(data, size as u32),
-            (PORT_FW_CFG_DMA_HI, 4) => {
-                data.copy_from_slice(&FW_CFG_DMA_SIGNATURE_CONTENT[..4]);
+            (port, 4) if port >= PORT_FW_CFG_DMA_HI && port <= PORT_FW_CFG_DMA_LO => {
+                let offset_in_port_range = (port - PORT_FW_CFG_DMA_HI) as usize;
+                data.copy_from_slice(
+                    &FW_CFG_DMA_SIGNATURE_CONTENT[offset_in_port_range..offset_in_port_range + 4],
+                );
             }
-            (PORT_FW_CFG_DMA_LO, 4) => {
-                data.copy_from_slice(&FW_CFG_DMA_SIGNATURE_CONTENT[4..]);
+            (port, 2) if port >= PORT_FW_CFG_DMA_HI && port <= PORT_FW_CFG_DMA_LO + 2 => {
+                let offset_in_port_range = (port - PORT_FW_CFG_DMA_HI) as usize;
+                data.copy_from_slice(
+                    &FW_CFG_DMA_SIGNATURE_CONTENT[offset_in_port_range..offset_in_port_range + 2],
+                );
+            }
+            (port, 1) if port >= PORT_FW_CFG_DMA_HI && port <= PORT_FW_CFG_DMA_LO + 3 => {
+                let offset_in_port_range = (port - PORT_FW_CFG_DMA_HI) as usize;
+                data.copy_from_slice(
+                    &FW_CFG_DMA_SIGNATURE_CONTENT[offset_in_port_range].as_bytes(),
+                );
             }
             _ => {
                 debug!("fw_cfg: Unsupported {size:#x}-byte read from port {port:#x}.");
@@ -2120,8 +2132,24 @@ mod unit_tests {
         let mut buff = [0xDD_u8; 4];
         fw_cfg.read(0, DMA_OFFSET, &mut buff);
         assert_eq!(*b"QEMU", buff);
+        let mut buff = [0xDD_u8; 1];
+        fw_cfg.read(0, DMA_OFFSET, &mut buff);
+        assert_eq!(*b"Q", buff);
+        let mut buff = [0xDD_u8; 4];
+        fw_cfg.read(0, DMA_OFFSET + 2, &mut buff);
+        assert_eq!(*b"MU C", buff);
+        let mut buff = [0xDD_u8; 4];
         fw_cfg.read(0, DMA_OFFSET + 4, &mut buff);
         assert_eq!(*b" CFG", buff);
+        let mut buff = [0xDD_u8; 2];
+        fw_cfg.read(0, DMA_OFFSET + 4, &mut buff);
+        assert_eq!(*b" C", buff);
+        let mut buff = [0xDD_u8; 2];
+        fw_cfg.read(0, DMA_OFFSET + 6, &mut buff);
+        assert_eq!(*b"FG", buff);
+        let mut buff = [0xDD_u8; 1];
+        fw_cfg.read(0, DMA_OFFSET + 7, &mut buff);
+        assert_eq!(*b"G", buff);
     }
 
     #[test]
