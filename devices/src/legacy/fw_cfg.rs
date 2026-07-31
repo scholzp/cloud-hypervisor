@@ -985,9 +985,8 @@ impl BusDevice for FwCfg {
                 data.copy_from_slice(&FW_CFG_DMA_SIGNATURE_CONTENT[4..]);
             }
             _ => {
-                debug!(
-                    "fw_cfg: read from unknown port {port:#x}: {size:#x} bytes and offset {offset:#x}."
-                );
+                debug!("fw_cfg: Unsupported {size:#x}-byte read from port {port:#x}.");
+                data.fill(0x0);
             }
         }
     }
@@ -2111,6 +2110,16 @@ mod unit_tests {
         // Reads with unsupported size zero the whole buffer in QEMU. We mimic this behavior.
         let mut fw_cfg = FwCfg::new(GuestMemoryAtomic::new(GuestMemoryMmap::new()));
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        // Two byte read forbidden
+        let mut buff = [0xEF; 2];
+        fw_cfg.read(0, DATA_OFFSET, &mut buff);
+        assert_eq!(fw_cfg.data_offset, 0);
+        assert_eq!(buff, [0x0; 2]);
+        // 4-byte read forbidden
+        let mut buff = [0xEF; 4];
+        fw_cfg.read(0, DATA_OFFSET, &mut buff);
+        assert_eq!(buff, [0x0; 4]);
+        assert_eq!(fw_cfg.data_offset, 0);
         // 1-byte read returns actual data
         let mut buff = [0xEF; 1];
         fw_cfg.read(0, DATA_OFFSET, &mut buff);
