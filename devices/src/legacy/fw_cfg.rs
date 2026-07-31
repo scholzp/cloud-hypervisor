@@ -977,7 +977,7 @@ impl BusDevice for FwCfg {
             (PORT_FW_CFG_SELECTOR, _) => {
                 error!("fw_cfg: selector register is write-only.");
             }
-            (PORT_FW_CFG_DATA, _) => _ = self.read_data(data, size as u32),
+            (PORT_FW_CFG_DATA, 1) => _ = self.read_data(data, size as u32),
             (PORT_FW_CFG_DMA_HI, 4) => {
                 data.copy_from_slice(&FW_CFG_DMA_SIGNATURE_CONTENT[..4]);
             }
@@ -2104,5 +2104,17 @@ mod unit_tests {
         assert_eq!(*b"QEMU", buff);
         fw_cfg.read(0, DMA_OFFSET + 4, &mut buff);
         assert_eq!(*b" CFG", buff);
+    }
+
+    #[test]
+    fn test_pio_invalid_reads_zero_buffer() {
+        // Reads with unsupported size zero the whole buffer in QEMU. We mimic this behavior.
+        let mut fw_cfg = FwCfg::new(GuestMemoryAtomic::new(GuestMemoryMmap::new()));
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        // 1-byte read returns actual data
+        let mut buff = [0xEF; 1];
+        fw_cfg.read(0, DATA_OFFSET, &mut buff);
+        assert_eq!(fw_cfg.data_offset, 1);
+        assert_eq!(buff, [b'Q']);
     }
 }
