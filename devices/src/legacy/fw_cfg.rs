@@ -92,7 +92,8 @@ const FW_CFG_FILE_DIR: u16 = 0x19;
 const FW_CFG_KNOWN_ITEMS: usize = 0x20;
 
 pub const FW_CFG_FILE_FIRST: u16 = 0x20;
-pub const FW_CFG_DMA_SIGNATURE: [u8; 8] = *b"QEMU CFG";
+pub const FW_CFG_DMA_SIGNATURE_CONTENT: [u8; 8] = *b"QEMU CFG";
+pub const FW_CFG_SIGNATURE_CONTENT: [u8; 4] = *b"QEMU";
 // https://github.com/torvalds/linux/blob/master/include/uapi/linux/qemu_fw_cfg.h
 pub const FW_CFG_ACPI_ID: &str = "QEMU0002";
 // Reserved (must be enabled)
@@ -489,7 +490,7 @@ impl FwCfg {
     pub fn new(memory: GuestMemoryAtomic<GuestMemoryMmap<AtomicBitmap>>) -> FwCfg {
         const DEFAULT_ITEM: FwCfgContent = FwCfgContent::Slice(&[]);
         let mut known_items = [DEFAULT_ITEM; FW_CFG_KNOWN_ITEMS];
-        known_items[FW_CFG_SIGNATURE as usize] = FwCfgContent::Slice(&FW_CFG_DMA_SIGNATURE);
+        known_items[FW_CFG_SIGNATURE as usize] = FwCfgContent::Slice(&FW_CFG_SIGNATURE_CONTENT);
         known_items[FW_CFG_ID as usize] = FwCfgContent::Slice(&FW_CFG_FEATURE);
         let file_buf = Vec::from(FwCfgFilesHeader { count_be: 0 }.as_mut_bytes());
         known_items[FW_CFG_FILE_DIR as usize] = FwCfgContent::Bytes(file_buf);
@@ -973,14 +974,10 @@ impl BusDevice for FwCfg {
             }
             (PORT_FW_CFG_DATA, _) => _ = self.read_data(data, size as u32),
             (PORT_FW_CFG_DMA_HI, 4) => {
-                let addr = self.dma_address;
-                let addr_hi = (addr >> 32) as u32;
-                data.copy_from_slice(&addr_hi.to_be_bytes());
+                data.copy_from_slice(&FW_CFG_DMA_SIGNATURE_CONTENT[..4]);
             }
             (PORT_FW_CFG_DMA_LO, 4) => {
-                let addr = self.dma_address;
-                let addr_lo = (addr & 0xffff_ffff) as u32;
-                data.copy_from_slice(&addr_lo.to_be_bytes());
+                data.copy_from_slice(&FW_CFG_DMA_SIGNATURE_CONTENT[4..]);
             }
             _ => {
                 debug!(
@@ -1066,7 +1063,7 @@ mod unit_tests {
 
         let mut data = vec![0u8];
 
-        let mut sig_iter = FW_CFG_DMA_SIGNATURE.into_iter();
+        let mut sig_iter = FW_CFG_SIGNATURE_CONTENT.into_iter();
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
         loop {
             if let Some(char) = sig_iter.next() {
@@ -1242,11 +1239,11 @@ mod unit_tests {
 
     #[test]
     fn test_dma_32bit_address_handling() {
-        let mut data = [0u8; 8];
+        let mut data = [0u8; 4];
         let payload_addr = GuestAddress(0x0000_2000_u64);
         let dma_32_bit = GuestAddress(0xFEEA_u64);
         let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
-            FW_CFG_DMA_SIGNATURE.len(),
+            FW_CFG_DMA_SIGNATURE_CONTENT.len(),
             payload_addr,
             dma_32_bit,
             AccessControl::new().with_read(true),
@@ -1255,7 +1252,7 @@ mod unit_tests {
 
         // Ensure that the signature is not stored at the target location before we actually did DMA
         let _ = mem.read(data.as_mut_bytes(), payload_addr);
-        assert_ne!(data, FW_CFG_DMA_SIGNATURE);
+        assert_ne!(data, FW_CFG_SIGNATURE_CONTENT);
         // Perform DMA by calling `BusDevice` functions
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_32_bit.0 as u32).to_be_bytes());
@@ -1269,7 +1266,7 @@ mod unit_tests {
         assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
         // Check that fw_cfg wrote the correct bytes to the destination GPA
         let _ = mem.read(data.as_mut_bytes(), payload_addr);
-        assert_eq!(data, FW_CFG_DMA_SIGNATURE);
+        assert_eq!(data, FW_CFG_SIGNATURE_CONTENT);
         // We triggered an operation thus the address should be reset to zero
         assert_eq!(fw_cfg.dma_address, 0);
     }
@@ -1279,7 +1276,7 @@ mod unit_tests {
         let payload_addr = GuestAddress(0x0000_2000_u64);
         let dma_64_bit = GuestAddress(0x1_ACAC_1CC0_u64);
         let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
-            FW_CFG_DMA_SIGNATURE.len(),
+            FW_CFG_SIGNATURE_CONTENT.len(),
             payload_addr,
             dma_64_bit,
             AccessControl::new().with_read(true),
@@ -1292,9 +1289,9 @@ mod unit_tests {
         let addr_lo_bytes: [u8; 4] = address_bytes[4..8].try_into().unwrap();
 
         // Ensure that the signature is not stored at the target location before we actually did DMA
-        let mut data = [0u8; 8];
+        let mut data = [0u8; 4];
         let _ = mem.read(data.as_mut_bytes(), payload_addr);
-        assert_ne!(data, FW_CFG_DMA_SIGNATURE);
+        assert_ne!(data, FW_CFG_SIGNATURE_CONTENT);
         // Perform DMA by calling `BusDevice` functions
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
         fw_cfg.write(0, DMA_OFFSET, &addr_hi_bytes);
@@ -1309,7 +1306,7 @@ mod unit_tests {
         assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
         // Check that fw_cfg wrote the correct bytes to the destination GPA
         let _ = mem.read(data.as_mut_bytes(), payload_addr);
-        assert_eq!(data, FW_CFG_DMA_SIGNATURE);
+        assert_eq!(data, FW_CFG_SIGNATURE_CONTENT);
         // We triggered an operation thus the address should be reset to zero
         assert_eq!(fw_cfg.dma_address, 0);
     }
@@ -1319,18 +1316,18 @@ mod unit_tests {
         let payload_gpa = GuestAddress(0x0000_2000_u64);
         let dma_gpa = GuestAddress(0xFEEA_u64);
         let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
-            FW_CFG_DMA_SIGNATURE.len(),
+            FW_CFG_SIGNATURE_CONTENT.len(),
             payload_gpa,
             dma_gpa,
             AccessControl::new(),
         )
         .unwrap();
 
-        let mut data = [0u8; 4];
+        let mut data = [0u8; 2];
         // Prepare to skip the first 4 bytes and ensure the offset is set accordingly
         update_fw_cfg_dma_access(
             &mem,
-            4,
+            2,
             payload_gpa,
             dma_gpa,
             AccessControl(0).with_skip(true),
@@ -1339,10 +1336,10 @@ mod unit_tests {
         // use the selector register to save one fwCfgDmaAccess update cycle
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
-        assert_eq!(fw_cfg.data_offset, 4);
+        assert_eq!(fw_cfg.data_offset, 2);
         // Check that the memory is still contains the initial value
         let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
-        assert_eq!(data, [INIT_BYTE_VALUE; 4]);
+        assert_eq!(data, [INIT_BYTE_VALUE; 2]);
         // Check that the control field is reset to zero
         let mut access_buffer = FwCfgDmaAccess {
             control: AccessControl(0xFFFF_FFFF),
@@ -1364,8 +1361,11 @@ mod unit_tests {
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
         // Check that the data read is the data expected
         let _ = mem.read(data.as_mut_bytes(), payload_gpa);
-        assert_eq!(data, FW_CFG_DMA_SIGNATURE[4..]);
-        assert_eq!(fw_cfg.data_offset, 8);
+        assert_eq!(data, FW_CFG_SIGNATURE_CONTENT[2..]);
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
 
         update_fw_cfg_dma_access(
             &mem,
@@ -1376,7 +1376,10 @@ mod unit_tests {
         )
         .unwrap();
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
-        assert_eq!(fw_cfg.data_offset, 8);
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
     }
 
     #[test]
@@ -1386,7 +1389,7 @@ mod unit_tests {
         let payload_gpa = GuestAddress(0x0000_2000_u64);
         let dma_gpa = GuestAddress(0xFEEA_u64);
         let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
-            FW_CFG_DMA_SIGNATURE.len(),
+            FW_CFG_DMA_SIGNATURE_CONTENT.len(),
             payload_gpa,
             dma_gpa,
             AccessControl(0).with_selector(0xABCD),
@@ -1420,7 +1423,7 @@ mod unit_tests {
         let payload_gpa = GuestAddress(0x0000_2000_u64);
         let dma_gpa = GuestAddress(0xFEEA_u64);
         let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
-            FW_CFG_DMA_SIGNATURE.len(),
+            FW_CFG_DMA_SIGNATURE_CONTENT.len(),
             payload_gpa,
             dma_gpa,
             AccessControl(0).with_select(true).with_selector(0x10),
@@ -1573,7 +1576,7 @@ mod unit_tests {
         let payload_addr = GuestAddress(0x0000_2000_u64);
         let dma_32_bit = GuestAddress(0x4000_u64);
         let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
-            FW_CFG_DMA_SIGNATURE.len(),
+            FW_CFG_DMA_SIGNATURE_CONTENT.len(),
             payload_addr,
             dma_32_bit,
             AccessControl::new().with_read(true),
@@ -1615,12 +1618,18 @@ mod unit_tests {
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
         // Check that the item was read and remaining bytes set to 0
         let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
-        assert_eq!(data[0..FW_CFG_DMA_SIGNATURE.len()], FW_CFG_DMA_SIGNATURE);
         assert_eq!(
-            data[FW_CFG_DMA_SIGNATURE.len()..],
-            [0; DATA_BUFFER_LEN - FW_CFG_DMA_SIGNATURE.len()]
+            data[0..FW_CFG_SIGNATURE_CONTENT.len()],
+            FW_CFG_SIGNATURE_CONTENT
         );
-        assert_eq!(fw_cfg.data_offset, 8);
+        assert_eq!(
+            data[FW_CFG_SIGNATURE_CONTENT.len()..],
+            [0; DATA_BUFFER_LEN - FW_CFG_SIGNATURE_CONTENT.len()]
+        );
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
         // Check that the control field is reset to zero
         let mut access_buffer = FwCfgDmaAccess {
             control: AccessControl(0xFFFF_FFFF),
@@ -1629,7 +1638,7 @@ mod unit_tests {
         .to_be_bytes();
         let _ = mem.read(&mut access_buffer, dma_gpa);
         assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
-        assert_eq!(fw_cfg.data_offset as usize, FW_CFG_DMA_SIGNATURE.len());
+        assert_eq!(fw_cfg.data_offset as usize, FW_CFG_SIGNATURE_CONTENT.len());
     }
 
     #[test]
@@ -1651,17 +1660,22 @@ mod unit_tests {
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
         // Check that the item was read and remaining bytes set to 0
         let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
-        // assert_eq!(data, [INIT_BYTE_VALUE; DATA_BUFFER_LEN]);
-        assert_eq!(data[0..FW_CFG_DMA_SIGNATURE.len()], FW_CFG_DMA_SIGNATURE);
         assert_eq!(
-            data[FW_CFG_DMA_SIGNATURE.len()..DATA_BUFFER_LEN],
-            [0; DATA_BUFFER_LEN - FW_CFG_DMA_SIGNATURE.len()]
+            data[0..FW_CFG_SIGNATURE_CONTENT.len()],
+            FW_CFG_SIGNATURE_CONTENT
+        );
+        assert_eq!(
+            data[FW_CFG_SIGNATURE_CONTENT.len()..DATA_BUFFER_LEN],
+            [0; DATA_BUFFER_LEN - FW_CFG_SIGNATURE_CONTENT.len()]
         );
         assert_eq!(
             data[DATA_BUFFER_LEN..],
             [INIT_BYTE_VALUE; 0x1000 - DATA_BUFFER_LEN]
         );
-        assert_eq!(fw_cfg.data_offset, 8);
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
         // Check that the control field is reset to zero
         let mut access_buffer = FwCfgDmaAccess {
             control: AccessControl(0xFFFF_FFFF),
@@ -1670,7 +1684,7 @@ mod unit_tests {
         .to_be_bytes();
         let _ = mem.read(&mut access_buffer, dma_gpa);
         assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
-        assert_eq!(fw_cfg.data_offset as usize, FW_CFG_DMA_SIGNATURE.len());
+        assert_eq!(fw_cfg.data_offset as usize, FW_CFG_SIGNATURE_CONTENT.len());
     }
 
     #[test]
@@ -1745,12 +1759,18 @@ mod unit_tests {
         // Check that the item was read and remaining bytes set to 0
         let l = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
         assert_eq!(l, 0x1000 - 0xd00);
-        assert_eq!(data[0..FW_CFG_DMA_SIGNATURE.len()], FW_CFG_DMA_SIGNATURE);
         assert_eq!(
-            data[FW_CFG_DMA_SIGNATURE.len()..0x1000 - 0xd00],
-            [0; 0x1000 - 0xd00 - FW_CFG_DMA_SIGNATURE.len()]
+            data[0..FW_CFG_SIGNATURE_CONTENT.len()],
+            FW_CFG_SIGNATURE_CONTENT
         );
-        assert_eq!(fw_cfg.data_offset, 8);
+        assert_eq!(
+            data[FW_CFG_SIGNATURE_CONTENT.len()..0x1000 - 0xd00],
+            [0; 0x1000 - 0xd00 - FW_CFG_SIGNATURE_CONTENT.len()]
+        );
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
         // Check that the control field is reset to zero
         let mut access_buffer = FwCfgDmaAccess {
             control: AccessControl(0xFFFF_FFFF),
@@ -1783,7 +1803,7 @@ mod unit_tests {
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
         // Check that the item was read and remaining bytes set to 0
         let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
-        assert_eq!(data, FW_CFG_DMA_SIGNATURE[..DATA_BUFFER_LEN]);
+        assert_eq!(data, FW_CFG_SIGNATURE_CONTENT[..DATA_BUFFER_LEN]);
         assert_eq!(fw_cfg.data_offset, DATA_BUFFER_LEN as u32);
         // Check that the control field is reset to zero
         let mut access_buffer = FwCfgDmaAccess {
@@ -1898,7 +1918,7 @@ mod unit_tests {
         let payload_gpa = GuestAddress(0x0000_2000_u64);
         let dma_gpa = GuestAddress(0xFEEA_u64);
         let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
-            FW_CFG_DMA_SIGNATURE.len() + 2,
+            FW_CFG_SIGNATURE_CONTENT.len() + 2,
             payload_gpa,
             dma_gpa,
             AccessControl::new().with_skip(true),
@@ -1908,7 +1928,10 @@ mod unit_tests {
         // use the selector register to save one fwCfgDmaAccess update cycle
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
-        assert_eq!(fw_cfg.data_offset, 8);
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
 
         let mut data = [0xCC; 0x1000];
         // Prepare to skip the first 4 bytes and ensure the offset is set accordingly
@@ -1921,7 +1944,10 @@ mod unit_tests {
         )
         .unwrap();
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
-        assert_eq!(fw_cfg.data_offset, 8);
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
 
         let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
         assert_eq!(data[..0x800], [0x0; 0x800]);
@@ -1961,7 +1987,7 @@ mod unit_tests {
 
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
         fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
-        assert_eq!(fw_cfg.data_offset, FW_CFG_DMA_SIGNATURE.len() as u32);
+        assert_eq!(fw_cfg.data_offset, FW_CFG_SIGNATURE_CONTENT.len() as u32);
         // Check that the control field is reset to zero
         let mut access_buffer = FwCfgDmaAccess {
             control: AccessControl(0xFFFF_FFFF),
@@ -2061,5 +2087,17 @@ mod unit_tests {
         .to_be_bytes();
         let _ = mem.read(&mut access_buffer, dma_gpa);
         assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0x0);
+    }
+
+    #[test]
+    fn test_dma_signature() {
+        let mut fw_cfg = FwCfg::new(GuestMemoryAtomic::new(GuestMemoryMmap::new()));
+
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        let mut buff = [0xDD_u8; 4];
+        fw_cfg.read(0, DMA_OFFSET, &mut buff);
+        assert_eq!(*b"QEMU", buff);
+        fw_cfg.read(0, DMA_OFFSET + 4, &mut buff);
+        assert_eq!(*b" CFG", buff);
     }
 }
