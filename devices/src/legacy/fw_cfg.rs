@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-/// Cloud Hypervisor implementation of Qemu's fw_cfg spec
+/// Cloud Hypervisor implementation of QEMU's fw_cfg spec
 /// https://www.qemu.org/docs/master/specs/fw_cfg.html
 /// Linux kernel fw_cfg driver header
 /// https://github.com/torvalds/linux/blob/master/include/uapi/linux/qemu_fw_cfg.h
@@ -11,6 +11,11 @@
 /// https://cateee.net/lkddb/web-lkddb/FW_CFG_SYSFS.html
 /// No kernel requirement if above functionality is not required,
 /// only firmware must implement mechanism to interact with this fw_cfg device
+#[cfg(all(feature = "fw_cfg", target_arch = "aarch64"))]
+compile_error!(
+    "fw_cfg is not supported on aarch64: the MMIO transport is incomplete and defective."
+);
+
 use std::{
     fs::File,
     io::{ErrorKind, Read, Result, Seek, SeekFrom},
@@ -36,6 +41,7 @@ use linux_loader::bootparam::boot_params;
 #[cfg(target_arch = "aarch64")]
 use linux_loader::loader::pe::arm64_image_header as boot_params;
 use log::{debug, error};
+use thiserror::Error;
 use vm_device::BusDevice;
 use vm_memory::bitmap::AtomicBitmap;
 use vm_memory::{
@@ -91,7 +97,8 @@ const FW_CFG_FILE_DIR: u16 = 0x19;
 const FW_CFG_KNOWN_ITEMS: usize = 0x20;
 
 pub const FW_CFG_FILE_FIRST: u16 = 0x20;
-pub const FW_CFG_DMA_SIGNATURE: [u8; 8] = *b"QEMU CFG";
+pub const FW_CFG_DMA_SIGNATURE_CONTENT: [u8; 8] = *b"QEMU CFG";
+pub const FW_CFG_SIGNATURE_CONTENT: [u8; 4] = *b"QEMU";
 // https://github.com/torvalds/linux/blob/master/include/uapi/linux/qemu_fw_cfg.h
 pub const FW_CFG_ACPI_ID: &str = "QEMU0002";
 // Reserved (must be enabled)
@@ -415,11 +422,29 @@ fn create_acpi_loader(acpi_table: AcpiTable) -> [FwCfgItem; 3] {
     [table_loader, acpi_rsdp, apci_tables]
 }
 
+#[derive(Error, Debug)]
+pub enum FwCfgError {
+    #[error("Reading the source (mostly a host file) failed.")]
+    ReadError,
+    #[error("Accessing guest memory for DMA failed")]
+    GuestMemAccessError,
+    #[error("DMA target guest physical address is illegal")]
+    IllegalGpa,
+    #[error("Cannot access the whole guest memory region for DMA")]
+    GuestMemOutOfBoundsAccess(u32),
+    #[error("An illegal item selector was chosen")]
+    IllegalSelector,
+    #[error("The cursor already points to the item'e end")]
+    CursorBehindContent,
+    #[error("The accessed item is too large")]
+    ToLarge,
+}
+
 impl FwCfg {
     pub fn new(memory: GuestMemoryAtomic<GuestMemoryMmap<AtomicBitmap>>) -> FwCfg {
         const DEFAULT_ITEM: FwCfgContent = FwCfgContent::Slice(&[]);
         let mut known_items = [DEFAULT_ITEM; FW_CFG_KNOWN_ITEMS];
-        known_items[FW_CFG_SIGNATURE as usize] = FwCfgContent::Slice(&FW_CFG_DMA_SIGNATURE);
+        known_items[FW_CFG_SIGNATURE as usize] = FwCfgContent::Slice(&FW_CFG_SIGNATURE_CONTENT);
         known_items[FW_CFG_ID as usize] = FwCfgContent::Slice(&FW_CFG_FEATURE);
         let file_buf = Vec::from(FwCfgFilesHeader { count_be: 0 }.as_mut_bytes());
         known_items[FW_CFG_FILE_DIR as usize] = FwCfgContent::Bytes(file_buf);
@@ -553,6 +578,16 @@ impl FwCfg {
         self.items.push(item);
         self.update_count();
         Ok(())
+    }
+
+    fn get_selected_content(&self) -> std::result::Result<&FwCfgContent, FwCfgError> {
+        if let Some(known_item) = self.known_items.get(self.selector as usize) {
+            Ok(known_item)
+        } else if let Some(item) = self.items.get((self.selector - FW_CFG_FILE_FIRST) as usize) {
+            Ok(&item.content)
+        } else {
+            Err(FwCfgError::IllegalSelector)
+        }
     }
 
     fn dma_read_content(
@@ -720,45 +755,37 @@ impl FwCfg {
         Ok(())
     }
 
-    fn read_content(content: &FwCfgContent, offset: u32, data: &mut [u8], size: u32) -> Option<u8> {
-        let start = offset as usize;
-        let end = start + size as usize;
-        match content {
-            FwCfgContent::Bytes(b) => {
-                if b.len() >= size as usize {
-                    data.copy_from_slice(&b[start..end]);
-                }
-            }
-            FwCfgContent::Slice(s) => {
-                if s.len() >= size as usize {
-                    data.copy_from_slice(&s[start..end]);
-                }
-            }
-            FwCfgContent::File(o, f) => {
-                f.read_exact_at(data, o + offset as u64).ok()?;
-            }
-            FwCfgContent::U32(n) => {
-                let bytes = n.to_le_bytes();
-                data.copy_from_slice(&bytes[start..end]);
-            }
+    fn read_content(&mut self, data: &mut [u8]) -> std::result::Result<u32, FwCfgError> {
+        let content_size = self
+            .get_selected_content()?
+            .size()
+            .map_err(|_| FwCfgError::ToLarge)?;
+
+        let remaining_content_bytes = ((content_size) as u32).saturating_sub(self.data_offset);
+        let content_bytes_to_copy = u32::min(remaining_content_bytes, data.len() as u32);
+        let planned_end = self.data_offset + content_bytes_to_copy;
+        let read_size = self
+            .get_selected_content()?
+            .access(self.data_offset)
+            .read(data[..content_bytes_to_copy as usize].as_mut_bytes())
+            .map_err(|_| FwCfgError::ReadError)?;
+
+        // Only relevant for file backed items. These can change between
+        // access so the data used to calculate can be stale. We cannot fix this.
+        if read_size != content_bytes_to_copy as usize {
+            return Err(FwCfgError::ReadError);
         }
-        Some(size as u8)
+
+        self.data_offset = planned_end;
+
+        Ok(content_bytes_to_copy)
     }
 
-    fn read_data(&mut self, data: &mut [u8], size: u32) -> u8 {
-        let ret = if let Some(content) = self.known_items.get(self.selector as usize) {
-            Self::read_content(content, self.data_offset, data, size)
-        } else if let Some(item) = self.items.get((self.selector - FW_CFG_FILE_FIRST) as usize) {
-            Self::read_content(&item.content, self.data_offset, data, size)
+    fn read_data(&mut self, data: &mut [u8]) {
+        if let Ok(read_len) = self.read_content(data) {
+            data[read_len as usize..].fill(0x0);
         } else {
-            error!("fw_cfg: selector {:#x} does not exist.", self.selector);
-            None
-        };
-        if let Some(val) = ret {
-            self.data_offset += size;
-            val
-        } else {
-            0
+            data.fill(0x0);
         }
     }
 }
@@ -766,11 +793,13 @@ impl FwCfg {
 impl BusDevice for FwCfg {
     fn read(&mut self, _base: u64, offset: u64, data: &mut [u8]) {
         let port = offset + PORT_FW_CFG_BASE;
-        let size = data.len();
-        match (port, size) {
-            (PORT_FW_CFG_SELECTOR, _) => {
-                error!("fw_cfg: selector register is write-only.");
+        match (port, data.len()) {
+            (PORT_FW_CFG_SELECTOR, 1) => {
+                // Selector register is actually defined write-only. QEMU’s combined PIO region
+                // treats a 1-byte read at this offset as a data read. Bypass to mimic QEMU quirk.
+                self.read_data(data);
             }
+            (PORT_FW_CFG_DATA, 1) => _ = self.read_data(data),
             (PORT_FW_CFG_DATA, _) => _ = self.read_data(data, size as u32),
             (PORT_FW_CFG_DMA_HI, 4) => {
                 let addr = self.dma_address;
@@ -784,8 +813,10 @@ impl BusDevice for FwCfg {
             }
             _ => {
                 debug!(
-                    "fw_cfg: read from unknown port {port:#x}: {size:#x} bytes and offset {offset:#x}."
+                    "fw_cfg: Unsupported {:#x}-byte read from port {port:#x}.",
+                    data.len()
                 );
+                data.fill(0x0);
             }
         }
     }
@@ -850,6 +881,8 @@ mod unit_tests {
     #[cfg(target_arch = "aarch64")]
     const DMA_OFFSET: u64 = 16;
 
+    const INIT_BYTE_VALUE: u8 = 0xAC;
+
     #[test]
     fn test_signature() {
         let gm = GuestMemoryAtomic::new(
@@ -860,7 +893,7 @@ mod unit_tests {
 
         let mut data = vec![0u8];
 
-        let mut sig_iter = FW_CFG_DMA_SIGNATURE.into_iter();
+        let mut sig_iter = FW_CFG_SIGNATURE_CONTENT.into_iter();
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
         loop {
             if let Some(char) = sig_iter.next() {
@@ -871,6 +904,7 @@ mod unit_tests {
             }
         }
     }
+
     #[test]
     fn test_kernel_cmdline() {
         let gm = GuestMemoryAtomic::new(
@@ -954,6 +988,118 @@ mod unit_tests {
     }
 
     #[test]
+    fn test_register_invalid_reads_zero_buffer() {
+        // Reads with unsupported size zero the whole buffer in QEMU. We mimic this behavior.
+        let mut fw_cfg = FwCfg::new(GuestMemoryAtomic::new(GuestMemoryMmap::new()));
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        // Two byte read forbidden
+        let mut buff = [0xEF; 2];
+        fw_cfg.read(0, DATA_OFFSET, &mut buff);
+        assert_eq!(fw_cfg.data_offset, 0);
+        assert_eq!(buff, [0x0; 2]);
+        // 4-byte read forbidden
+        let mut buff = [0xEF; 4];
+        fw_cfg.read(0, DATA_OFFSET, &mut buff);
+        assert_eq!(buff, [0x0; 4]);
+        assert_eq!(fw_cfg.data_offset, 0);
+        // 1-byte read returns actual data
+        let mut buff = [0xEF; 1];
+        fw_cfg.read(0, DATA_OFFSET, &mut buff);
+        assert_eq!(fw_cfg.data_offset, 1);
+        assert_eq!(buff, [b'Q']);
+    }
+
+    #[test]
+    fn test_register_qemu_selector_read_quirk() {
+        // While defined as write-only, QEMU uses a port-mapping that leaves the select register
+        // readable. For full compatibility we also allow reading from the selector register as a
+        // quirk.
+        let mut fw_cfg = FwCfg::new(GuestMemoryAtomic::new(GuestMemoryMmap::new()));
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        // 1-byte read returns actual data
+        let mut buff = [0xEF; 1];
+        fw_cfg.read(0, SELECTOR_OFFSET, &mut buff);
+        assert_eq!(fw_cfg.data_offset, 1);
+        assert_eq!(buff, [b'Q']);
+        // Forbidden access zeros buffer similar to data register access. Offset isn't moved.
+        let mut buff = [0xEF; 2];
+        fw_cfg.read(0, SELECTOR_OFFSET, &mut buff);
+        assert_eq!(fw_cfg.data_offset, 1);
+        assert_eq!(buff, [0x0; 2]);
+    }
+
+    #[test]
+    fn test_register_reads_past_eof_return_zero() {
+        let mut fw_cfg = FwCfg::new(GuestMemoryAtomic::new(GuestMemoryMmap::new()));
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        let mut buff = [0xEF; 8];
+        let max_offset = FW_CFG_SIGNATURE_CONTENT.len() as u32;
+        for (offset, byte) in buff.iter_mut().enumerate() {
+            fw_cfg.read(0, DATA_OFFSET, byte.as_mut_bytes());
+            let expected_offset = if (offset as u32 + 1) < max_offset {
+                offset as u32 + 1
+            } else {
+                max_offset
+            };
+            assert_eq!(fw_cfg.data_offset, expected_offset);
+        }
+        assert_eq!(buff[..4], FW_CFG_SIGNATURE_CONTENT);
+        assert_eq!(buff[4..], [0; 4]);
+    }
+
+    #[test]
+    fn test_register_reads_with_invalid_selector() {
+        const SELECTOR_INITIALIZED_WITH_DEFAULT: u16 = 0x08;
+        let mut fw_cfg = FwCfg::new(GuestMemoryAtomic::new(GuestMemoryMmap::new()));
+        fw_cfg.known_items[SELECTOR_INITIALIZED_WITH_DEFAULT as usize] = FwCfgContent::Slice(&[]);
+        fw_cfg.write(0, SELECTOR_OFFSET, &[0xFF, 0]);
+        let mut buff = [0xEF_u8; 8];
+        for byte in buff.iter_mut() {
+            fw_cfg.read(0, DATA_OFFSET, byte.as_mut_bytes());
+            assert_eq!(fw_cfg.data_offset, 0);
+        }
+        assert_eq!(buff, [0; 8]);
+
+        fw_cfg.write(
+            0,
+            SELECTOR_OFFSET,
+            &SELECTOR_INITIALIZED_WITH_DEFAULT.to_le_bytes(),
+        );
+        let mut buff = [0xEF_u8; 8];
+        for byte in buff.iter_mut() {
+            fw_cfg.read(0, DATA_OFFSET, byte.as_mut_bytes());
+            assert_eq!(fw_cfg.data_offset, 0);
+        }
+        assert_eq!(buff, [0; 8]);
+    }
+
+    #[test]
+    fn test_register_writing_select_resets_internal_cursor() {
+        let mut fw_cfg = FwCfg::new(GuestMemoryAtomic::new(GuestMemoryMmap::new()));
+        let payload_bytes = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        let content = FwCfgContent::Bytes(payload_bytes.to_vec());
+        let cfg_item = FwCfgItem {
+            name: "payload".to_string(),
+            content,
+        };
+        fw_cfg.add_item(cfg_item).unwrap();
+
+        // read the same bytes twice, demonstrating that we can reset the cursor by selecting a new item.
+        for _ in 0..2 {
+            fw_cfg.write(0, SELECTOR_OFFSET, &FW_CFG_FILE_FIRST.to_le_bytes());
+            assert_eq!(fw_cfg.data_offset, 0);
+            let mut buffer = [0xEF_u8; 6];
+            const MAX_INDEX: usize = 4;
+            for index in 0..MAX_INDEX {
+                fw_cfg.read(0, DATA_OFFSET, buffer[index].as_mut_bytes());
+                assert_eq!(fw_cfg.data_offset as usize, index + 1);
+            }
+            assert_eq!(buffer[..MAX_INDEX], payload_bytes[..MAX_INDEX]);
+            assert_eq!(buffer[MAX_INDEX..], [0xEF; 2]);
+            assert_eq!(fw_cfg.data_offset, MAX_INDEX as u32);
+        }
+    }
+
     fn test_dma() {
         let code = [
             0xba, 0xf8, 0x03, 0x00, 0xd8, 0x04, b'0', 0xee, 0xb0, b'\n', 0xee, 0xf4,
