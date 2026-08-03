@@ -96,9 +96,8 @@ pub const FW_CFG_DMA_SIGNATURE: [u8; 8] = *b"QEMU CFG";
 pub const FW_CFG_ACPI_ID: &str = "QEMU0002";
 // Reserved (must be enabled)
 const FW_CFG_F_RESERVED: u8 = 1 << 0;
-// DMA Toggle Bit (enabled by default)
 const FW_CFG_F_DMA: u8 = 1 << 1;
-pub const FW_CFG_FEATURE: [u8; 4] = [FW_CFG_F_RESERVED | FW_CFG_F_DMA, 0, 0, 0];
+pub const FW_CFG_FEATURE: [u8; 4] = [FW_CFG_F_RESERVED, 0, 0, 0];
 
 const COMMAND_ALLOCATE: u32 = 0x1;
 const COMMAND_ADD_POINTER: u32 = 0x2;
@@ -594,6 +593,11 @@ impl FwCfg {
     }
 
     fn do_dma(&mut self) {
+        // If the DMA bit is not set, than DMA is a no-op like Write from the traditional interface
+        if (FW_CFG_FEATURE[0] & FW_CFG_F_DMA) == 0 {
+            return;
+        }
+
         let dma_address = self.dma_address;
         let mut access = FwCfgDmaAccess::new_zeroed();
         let dma_access = match self
@@ -1006,6 +1010,9 @@ mod unit_tests {
         fw_cfg.write(0, DMA_OFFSET, &dma_lo);
         fw_cfg.write(0, DMA_OFFSET + 4, &dma_hi);
         let _ = mem.read(&mut data, GuestAddress(code_address));
-        assert_eq!(data, code);
+
+        // Assert the DMA path is currently deactivated
+        assert_eq!(data, [0u8; 12]);
+        assert_eq!(fw_cfg.data_offset, 0);
     }
 }
