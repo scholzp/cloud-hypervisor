@@ -793,8 +793,10 @@ impl BusDevice for FwCfg {
             }
             _ => {
                 debug!(
-                    "fw_cfg: read from unknown port {port:#x}: {size:#x} bytes and offset {offset:#x}."
+                    "fw_cfg: Unsupported {:#x}-byte read from port {port:#x}.",
+                    data.len()
                 );
+                data.fill(0x0);
             }
         }
     }
