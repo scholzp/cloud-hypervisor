@@ -477,18 +477,20 @@ fn create_acpi_loader(acpi_table: AcpiTable) -> [FwCfgItem; 3] {
 
 #[derive(Error, Debug)]
 pub enum FwCfgError {
-    #[error("Collective error")]
+    #[error("Reading the source (mostly a host file) failed.")]
     ReadError,
-    #[error("Collective error")]
+    #[error("Accessing guest memory for DMA failed")]
     GuestMemAccessError,
-    #[error("Collective error")]
+    #[error("DMA target guest physical address is illegal")]
     IllegalGpa,
-    #[error("Collective error")]
+    #[error("Cannot access the whole guest memory region for DMA")]
     GuestMemOutOfBoundsAccess(u32),
-    #[error("Collective error")]
+    #[error("An illegal item selector was chosen")]
     IllegalSelector,
-    #[error("Collective error")]
+    #[error("The cursor already points to the item'e end")]
     CursorBehindContent,
+    #[error("The accessed item is too large")]
+    ToLarge,
 }
 
 impl FwCfg {
@@ -633,6 +635,16 @@ impl FwCfg {
 
     const BUFFER_SIZE: usize = 0x400;
 
+    fn get_selected_content(&self) -> std::result::Result<&FwCfgContent, FwCfgError> {
+        if let Some(known_item) = self.known_items.get(self.selector as usize) {
+            Ok(known_item)
+        } else if let Some(item) = self.items.get((self.selector - FW_CFG_FILE_FIRST) as usize) {
+            Ok(&item.content)
+        } else {
+            Err(FwCfgError::IllegalSelector)
+        }
+    }
+
     // Returns Ok() with the total amount of payload bytes written if all payload write were
     // written. Else returns an error indicating what part of the write did not succeed.
     fn dma_read_content(
@@ -640,30 +652,24 @@ impl FwCfg {
         gpa: GuestAddress,
         dma_len: u32,
     ) -> std::result::Result<u32, FwCfgError> {
-        let content = if let Some(known_item) = self.known_items.get(self.selector as usize) {
-            known_item
-        } else if let Some(item) = self.items.get((self.selector - FW_CFG_FILE_FIRST) as usize) {
-            &item.content
-        } else {
-            return Err(FwCfgError::IllegalSelector);
-        };
+        let content_size = self
+            .get_selected_content()?
+            .size()
+            .map_err(|_| FwCfgError::ToLarge)? as usize;
+
+        if content_size <= self.data_offset as usize {
+            return Err(FwCfgError::CursorBehindContent);
+        }
 
         let mut buffer = [0_u8; Self::BUFFER_SIZE];
-        let content_size = content.size().unwrap() as usize;
         let mut read_size = usize::min(Self::BUFFER_SIZE, content_size);
         let mut offset = 0;
         let mut reached_eof = false;
         let remaining_content_bytes = ((content_size) as u32).saturating_sub(self.data_offset);
         let planned_end = self.data_offset + u32::min(dma_len, remaining_content_bytes);
-        if content_size <= self.data_offset as usize {
-            return Err(FwCfgError::CursorBehindContent);
-        }
         while (dma_len - offset > 0) && !reached_eof {
             read_size = usize::min(read_size, (dma_len - offset) as usize);
-            let content_bytes_read = content
-                .access(self.data_offset)
-                .read(buffer[..read_size].as_mut_bytes())
-                .map_err(|_| FwCfgError::ReadError)?;
+            let content_bytes_read = self.read_content(&mut buffer[..read_size])? as usize;
 
             if content_bytes_read == 0 {
                 break;
@@ -697,8 +703,6 @@ impl FwCfg {
                 self.data_offset = planned_end;
                 return Err(FwCfgError::GuestMemOutOfBoundsAccess(offset));
             }
-
-            self.data_offset += read_size as u32;
         }
         Ok(offset)
     }
@@ -755,6 +759,8 @@ impl FwCfg {
         match operation_result {
             Ok(dma_write_len) => Ok(dma_write_len as usize),
             Err(FwCfgError::IllegalGpa) => Err(ErrorKind::InvalidInput.into()),
+            Err(FwCfgError::ToLarge) => Err(ErrorKind::InvalidInput.into()),
+            Err(FwCfgError::ReadError) => Err(ErrorKind::InvalidInput.into()),
             Err(FwCfgError::GuestMemOutOfBoundsAccess(n)) => Ok(n as usize),
             Err(_) => unreachable!(
                 "All other error kinds can only occur in dma_read_content, which is handled above"
@@ -808,17 +814,14 @@ impl FwCfg {
         } else if control.write() {
             Err(ErrorKind::InvalidInput.into())
         } else if control.skip() {
-            let item_size = if let Some(known_item) = self.known_items.get(self.selector as usize) {
-                known_item.size().unwrap()
-            } else if let Some(item) = self.items.get((self.selector - FW_CFG_FILE_FIRST) as usize)
-            {
-                item.content.size().unwrap()
-            } else {
-                0
-            };
-            self.data_offset += if (item_size.saturating_sub(self.data_offset)) < dma_access.length
-            {
-                item_size.saturating_sub(self.data_offset)
+            let remaining_size = self
+                .get_selected_content()
+                .unwrap_or(&FwCfgContent::default())
+                .size()
+                .unwrap_or(0)
+                .saturating_sub(self.data_offset);
+            self.data_offset += if remaining_size < dma_access.length {
+                remaining_size
             } else {
                 dma_access.length
             };
@@ -926,73 +929,51 @@ impl FwCfg {
         Ok(())
     }
 
-    fn read_content(&mut self, data: &mut [u8], size: u32) -> Option<u8> {
-        let content = if let Some(content) = self.known_items.get(self.selector as usize) {
-            Some(content)
-        } else if let Some(item) = self.items.get((self.selector - FW_CFG_FILE_FIRST) as usize) {
-            Some(&item.content)
-        } else {
-            error!("fw_cfg: selector {:#x} does not exist.", self.selector);
-            None
-        };
+    fn read_content(&mut self, data: &mut [u8]) -> std::result::Result<u32, FwCfgError> {
+        let content_size = self
+            .get_selected_content()?
+            .size()
+            .map_err(|_| FwCfgError::ToLarge)?;
 
-        let content_size = if let Some(content) = content {
-            content.size().unwrap() as usize
-        } else {
-            0
-        };
         let remaining_content_bytes = ((content_size) as u32).saturating_sub(self.data_offset);
-        let mut content_bytes_to_copy = u32::min(remaining_content_bytes, size);
-        let mut planned_end = self.data_offset + content_bytes_to_copy;
-        let start = self.data_offset as usize;
-        let end = start + content_bytes_to_copy as usize;
-        match content {
-            Some(FwCfgContent::Bytes(b)) => {
-                data[..content_bytes_to_copy as usize].copy_from_slice(&b[start..end]);
-            }
-            Some(FwCfgContent::Slice(s)) => {
-                data[..content_bytes_to_copy as usize].copy_from_slice(&s[start..end]);
-            }
-            Some(FwCfgContent::File(o, f)) => {
-                if f.read_exact_at(
-                    &mut data[..content_bytes_to_copy as usize],
-                    o + self.data_offset as u64,
-                )
-                .is_err()
-                {
-                    content_bytes_to_copy = 0;
-                    planned_end = self.data_offset;
-                }
-            }
-            Some(FwCfgContent::U32(n)) => {
-                let bytes = n.to_le_bytes();
-                data[..content_bytes_to_copy as usize].copy_from_slice(&bytes[start..end]);
-            }
-            None => { /* Do Nothing. */ }
-        };
-        data[content_bytes_to_copy as usize..].fill(0x0);
+        let content_bytes_to_copy = u32::min(remaining_content_bytes, data.len() as u32);
+        let planned_end = self.data_offset + content_bytes_to_copy;
+        let read_size = self
+            .get_selected_content()?
+            .access(self.data_offset)
+            .read(data[..content_bytes_to_copy as usize].as_mut_bytes())
+            .map_err(|_| FwCfgError::ReadError)?;
+
+        // Only relevant for file backed items. These can change between
+        // access so the data used to calculate can be stale. We cannot fix this.
+        if read_size != content_bytes_to_copy as usize {
+            return Err(FwCfgError::ReadError);
+        }
 
         self.data_offset = planned_end;
 
-        Some(content_bytes_to_copy as u8)
+        Ok(content_bytes_to_copy)
     }
 
-    fn read_data(&mut self, data: &mut [u8], size: u32) {
-        _ = self.read_content(data, size);
+    fn read_data(&mut self, data: &mut [u8]) {
+        if let Ok(read_len) = self.read_content(data) {
+            data[read_len as usize..].fill(0x0);
+        } else {
+            data.fill(0x0);
+        }
     }
 }
 
 impl BusDevice for FwCfg {
     fn read(&mut self, _base: u64, offset: u64, data: &mut [u8]) {
         let port = offset + PORT_FW_CFG_BASE;
-        let size = data.len();
-        match (port, size) {
+        match (port, data.len()) {
             (PORT_FW_CFG_SELECTOR, 1) => {
                 // Selector register is actually defined write-only. QEMU’s combined PIO region
                 // treats a 1-byte read at this offset as a data read. Bypass to mimic QEMU quirk.
-                self.read_data(data, size as u32);
+                self.read_data(data);
             }
-            (PORT_FW_CFG_DATA, 1) => _ = self.read_data(data, size as u32),
+            (PORT_FW_CFG_DATA, 1) => _ = self.read_data(data),
             (port, 4) if port >= PORT_FW_CFG_DMA_HI && port <= PORT_FW_CFG_DMA_LO => {
                 let offset_in_port_range = (port - PORT_FW_CFG_DMA_HI) as usize;
                 data.copy_from_slice(
@@ -1012,7 +993,10 @@ impl BusDevice for FwCfg {
                 );
             }
             _ => {
-                debug!("fw_cfg: Unsupported {size:#x}-byte read from port {port:#x}.");
+                debug!(
+                    "fw_cfg: Unsupported {:#x}-byte read from port {port:#x}.",
+                    data.len()
+                );
                 data.fill(0x0);
             }
         }
