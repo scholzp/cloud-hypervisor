@@ -43,12 +43,12 @@ use linux_loader::loader::pe::arm64_image_header as boot_params;
 use log::{debug, error};
 use thiserror::Error;
 use vm_device::BusDevice;
-use vm_memory::bitmap::AtomicBitmap;
+use vm_memory::{Address, bitmap::AtomicBitmap};
 use vm_memory::{
     ByteValued, Bytes, GuestAddress, GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap,
 };
 use vmm_sys_util::sock_ctrl_msg::IntoIovec;
-use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 #[cfg(target_arch = "x86_64")]
 // https://github.com/project-oak/oak/tree/main/stage0_bin#memory-layout
@@ -195,35 +195,88 @@ pub struct FwCfg {
     memory: GuestMemoryAtomic<GuestMemoryMmap<AtomicBitmap>>,
 }
 
-#[repr(C)]
-#[derive(Debug, IntoBytes, FromBytes)]
+/// Representation of the FWCfgDmaAccess struct of QEMU with adapter functions.
+///
+/// The QEMU documentation defines the structure as follows:
+/// ```C
+/// typedef struct FWCfgDmaAccess {
+///    uint32_t control;
+///    uint32_t length;
+///    uint64_t address;
+/// } FWCfgDmaAccess;
+/// ```
+/// Each field of the structure is in big-endian format and control field is at the lowest address.
+///
+/// Our implementation uses the functions `from_be_bytes` and `to_be_bytes` for explicit conversion
+/// from/to BE wire format so we can work with each field without individual conversion to native
+/// endianness.
+#[derive(Debug, Default)]
 struct FwCfgDmaAccess {
-    control_be: u32,
-    length_be: u32,
-    address_be: u64,
+    control: AccessControl,
+    length: u32,
+    address: u64,
 }
 
-// https://github.com/torvalds/linux/blob/master/include/uapi/linux/qemu_fw_cfg.h#L67
+impl FwCfgDmaAccess {
+    // Wire size of the QEMU structure
+    const WIRE_SIZE: usize = 16;
+
+    /// Used to create a [`FwCfgDmaAccess`] from a bytes array containing data in big-endian format.
+    fn from_be_bytes(bytes: &[u8; FwCfgDmaAccess::WIRE_SIZE]) -> Self {
+        Self {
+            control: AccessControl(u32::from_be_bytes(bytes[0..4].try_into().expect(
+                "conversion of 4 random bytes should work and input is statically `[u8; 16]`",
+            ))),
+            length: u32::from_be_bytes(bytes[4..8].try_into().expect(
+                "conversion of 4 random bytes should work and input is statically `[u8; 16]`",
+            )),
+            address: u64::from_be_bytes(bytes[8..16].try_into().expect(
+                "conversion of 8 random bytes should work and input is statically `[u8; 16]`",
+            )),
+        }
+    }
+
+    /// Used to create a bytes array from [`FwCfgDmaAccess`]. Each field is transformed to BE
+    /// representation.
+    #[cfg(test)]
+    fn to_be_bytes(&self) -> [u8; FwCfgDmaAccess::WIRE_SIZE] {
+        let mut result = [0_u8; FwCfgDmaAccess::WIRE_SIZE];
+        result[0..4].copy_from_slice(&self.control.0.to_be_bytes());
+        result[4..8].copy_from_slice(&self.length.to_be_bytes());
+        result[8..16].copy_from_slice(&self.address.to_be_bytes());
+        result
+    }
+}
+
+/// DMA access control bits
+///
+/// QEMU defines them as follows
+/// ```C
+/// #define FW_CFG_DMA_CTL_ERROR   0x01
+/// #define FW_CFG_DMA_CTL_READ    0x02
+/// #define FW_CFG_DMA_CTL_SKIP    0x04
+/// #define FW_CFG_DMA_CTL_SELECT  0x08
+/// #define FW_CFG_DMA_CTL_WRITE   0x10
+/// ```
+/// Sources:
+/// https://github.com/torvalds/linux/blob/master/include/uapi/linux/qemu_fw_cfg.h#L67
+/// https://github.com/qemu/qemu/blob/6e9a825c1d4e7b62d072e99a89ecd1a74c7f0d55/hw/nvram/fw_cfg.c#L52
 #[bitfield(u32)]
 struct AccessControl {
     // FW_CFG_DMA_CTL_ERROR = 0x01
     error: bool,
     // FW_CFG_DMA_CTL_READ = 0x02
     read: bool,
-    #[bits(1)]
-    _unused2: u8,
     // FW_CFG_DMA_CTL_SKIP = 0x04
     skip: bool,
-    #[bits(3)]
-    _unused3: u8,
-    // FW_CFG_DMA_CTL_ERROR = 0x08
+    // FW_CFG_DMA_CTL_SELECT = 0x08
     select: bool,
-    #[bits(7)]
-    _unused4: u8,
     // FW_CFG_DMA_CTL_WRITE = 0x10
     write: bool,
+    #[bits(11)]
+    _unused: u16,
     #[bits(16)]
-    _unused: u32,
+    selector: u16,
 }
 
 #[repr(C)]
@@ -580,6 +633,8 @@ impl FwCfg {
         Ok(())
     }
 
+    const BUFFER_SIZE: usize = 0x400;
+
     fn get_selected_content(&self) -> std::result::Result<&FwCfgContent, FwCfgError> {
         if let Some(known_item) = self.known_items.get(self.selector as usize) {
             Ok(known_item)
@@ -590,83 +645,202 @@ impl FwCfg {
         }
     }
 
+    // Returns Ok() with the total amount of payload bytes written if all payload write were
+    // written. Else returns an error indicating what part of the write did not succeed.
     fn dma_read_content(
-        &self,
-        content: &FwCfgContent,
-        offset: u32,
-        len: u32,
-        address: u64,
-    ) -> Result<u32> {
-        let content_size = content.size()?.saturating_sub(offset);
-        let op_size = std::cmp::min(content_size, len);
-        let mut access = content.access(offset);
-        let mut buf = vec![0u8; op_size as usize];
-        access.read_exact(buf.as_mut_bytes())?;
-        let r = self
-            .memory
-            .memory()
-            .write(buf.as_bytes(), GuestAddress(address));
-        match r {
-            Err(e) => {
-                error!("fw_cfg: dma read error: {e:x?}");
-                Err(ErrorKind::InvalidInput.into())
-            }
-            Ok(size) => Ok(size as u32),
+        &mut self,
+        gpa: GuestAddress,
+        dma_len: u32,
+    ) -> std::result::Result<u32, FwCfgError> {
+        let content_size = self
+            .get_selected_content()?
+            .size()
+            .map_err(|_| FwCfgError::ToLarge)? as usize;
+
+        if content_size <= self.data_offset as usize {
+            return Err(FwCfgError::CursorBehindContent);
         }
+
+        let mut buffer = [0_u8; Self::BUFFER_SIZE];
+        let mut read_size = usize::min(Self::BUFFER_SIZE, content_size);
+        let mut offset = 0;
+        let mut reached_eof = false;
+        let remaining_content_bytes = ((content_size) as u32).saturating_sub(self.data_offset);
+        let planned_end = self.data_offset + u32::min(dma_len, remaining_content_bytes);
+        while (dma_len - offset > 0) && !reached_eof {
+            read_size = usize::min(read_size, (dma_len - offset) as usize);
+            let content_bytes_read = self.read_content(&mut buffer[..read_size])? as usize;
+
+            if content_bytes_read == 0 {
+                break;
+            }
+
+            if content_bytes_read < read_size {
+                read_size = content_bytes_read;
+                reached_eof = true;
+            };
+
+            let offset_gpa = gpa
+                .checked_add(offset as u64)
+                .ok_or(FwCfgError::IllegalGpa)
+                .or_else(|e| {
+                    self.data_offset = planned_end;
+                    Err(e)
+                })?;
+
+            let bytes_written = self
+                .memory
+                .memory()
+                .write(&buffer[..read_size], offset_gpa)
+                .map_err(|_| FwCfgError::IllegalGpa)
+                .or_else(|e| {
+                    self.data_offset = planned_end;
+                    Err(e)
+                })?;
+
+            offset += bytes_written as u32;
+            if bytes_written != read_size {
+                self.data_offset = planned_end;
+                return Err(FwCfgError::GuestMemOutOfBoundsAccess(offset));
+            }
+        }
+        Ok(offset)
     }
 
-    fn dma_read(&mut self, selector: u16, len: u32, address: u64) -> Result<()> {
-        let op_size = if let Some(content) = self.known_items.get(selector as usize) {
-            self.dma_read_content(content, self.data_offset, len, address)
-        } else if let Some(item) = self.items.get((selector - FW_CFG_FILE_FIRST) as usize) {
-            self.dma_read_content(&item.content, self.data_offset, len, address)
-        } else {
-            error!("fw_cfg: selector {selector:#x} does not exist.");
-            Err(ErrorKind::NotFound.into())
-        }?;
-        self.data_offset += op_size;
-        Ok(())
+    fn dma_set_memory_to_zero(
+        &self,
+        gpa: GuestAddress,
+        dma_len: u32,
+    ) -> std::result::Result<u32, FwCfgError> {
+        let buffer = [0_u8; Self::BUFFER_SIZE];
+        let mut offset = 0;
+        while dma_len - offset > 0 {
+            let write_size = usize::min(Self::BUFFER_SIZE, (dma_len - offset) as usize);
+            let offset_gpa = gpa
+                .checked_add(offset as u64)
+                .ok_or(FwCfgError::IllegalGpa)?;
+
+            let bytes_written = self
+                .memory
+                .memory()
+                .write(&buffer[..write_size], offset_gpa)
+                .map_err(|_| FwCfgError::IllegalGpa)?;
+
+            offset += bytes_written as u32;
+            if bytes_written != write_size {
+                return Err(FwCfgError::GuestMemOutOfBoundsAccess(offset));
+            }
+        }
+
+        Ok(offset)
+    }
+
+    fn dma_read(&mut self, len: u32, address: u64) -> Result<usize> {
+        let write_result = self.dma_read_content(GuestAddress(address), len);
+
+        // Find the correct zero handling depending on what succeeded in the item write
+        let operation_result = match write_result {
+            Ok(written) if written == len => Ok(written),
+            Ok(written) if written < len => GuestAddress(address)
+                .checked_add(written as u64)
+                .ok_or(FwCfgError::IllegalGpa)
+                .and_then(|gpa| {
+                    self.dma_set_memory_to_zero(gpa, len - written)
+                        .map(|zeros_written| written + zeros_written)
+                }),
+            Ok(_) => unreachable!("Should never write more bytes"),
+            Err(FwCfgError::IllegalSelector) | Err(FwCfgError::CursorBehindContent) => {
+                self.dma_set_memory_to_zero(GuestAddress(address), len)
+            }
+            Err(FwCfgError::GuestMemOutOfBoundsAccess(written)) => Ok(written),
+            Err(e) => Err(e),
+        };
+
+        match operation_result {
+            Ok(dma_write_len) => Ok(dma_write_len as usize),
+            Err(FwCfgError::IllegalGpa) => Err(ErrorKind::InvalidInput.into()),
+            Err(FwCfgError::ToLarge) => Err(ErrorKind::InvalidInput.into()),
+            Err(FwCfgError::ReadError) => Err(ErrorKind::InvalidInput.into()),
+            Err(FwCfgError::GuestMemOutOfBoundsAccess(n)) => Ok(n as usize),
+            Err(_) => unreachable!(
+                "All other error kinds can only occur in dma_read_content, which is handled above"
+            ),
+        }
     }
 
     fn do_dma(&mut self) {
         let dma_address = self.dma_address;
-        let mut access = FwCfgDmaAccess::new_zeroed();
+        self.dma_address = 0;
+        let mut dma_access_buf = [0_u8; FwCfgDmaAccess::WIRE_SIZE];
         let dma_access = match self
             .memory
             .memory()
-            .read(access.as_mut_bytes(), GuestAddress(dma_address))
+            .read(dma_access_buf.as_mut_bytes(), GuestAddress(dma_address))
         {
-            Ok(_) => access,
+            Ok(FwCfgDmaAccess::WIRE_SIZE) => FwCfgDmaAccess::from_be_bytes(&dma_access_buf),
+            Ok(n) => {
+                error!("fw_cfg: Read an invalid amount of bytes: 0x{n:x}");
+                // If QEMU cannot read the entire access descriptor it tries to write at least the
+                // control field with the error bit set. We do the same by discarding the write
+                // result and returning afterwards.
+                let _ = self.memory.memory().write(
+                    &AccessControl(0).with_error(true).0.to_be_bytes(),
+                    GuestAddress(dma_address),
+                );
+                return;
+            }
             Err(e) => {
                 error!("fw_cfg: invalid address of dma access {dma_address:#x}: {e:?}");
                 return;
             }
         };
-        let control = AccessControl(u32::from_be(dma_access.control_be));
+        let control = dma_access.control;
         if control.select() {
-            self.selector = control.select() as u16;
+            self.selector = control.selector();
+            self.data_offset = 0;
         }
-        let len = u32::from_be(dma_access.length_be);
-        let addr = u64::from_be(dma_access.address_be);
-        let ret = if control.read() {
-            self.dma_read(self.selector, len, addr)
+        let ret: Result<()> = if control.read() {
+            let bytes_written = self.dma_read(dma_access.length, dma_access.address);
+            match bytes_written {
+                Ok(written) => {
+                    if written == dma_access.length as usize {
+                        Ok(())
+                    } else {
+                        Err(ErrorKind::InvalidInput.into())
+                    }
+                }
+                Err(_) => Err(ErrorKind::InvalidInput.into()),
+            }
         } else if control.write() {
             Err(ErrorKind::InvalidInput.into())
         } else if control.skip() {
-            self.data_offset += len;
+            let remaining_size = self
+                .get_selected_content()
+                .unwrap_or(&FwCfgContent::default())
+                .size()
+                .unwrap_or(0)
+                .saturating_sub(self.data_offset);
+            self.data_offset += if remaining_size < dma_access.length {
+                remaining_size
+            } else {
+                dma_access.length
+            };
             Ok(())
         } else {
-            Err(ErrorKind::InvalidData.into())
+            // Every other operation is a no-op
+            Ok(())
         };
         let mut access_resp = AccessControl(0);
         if let Err(e) = ret {
             error!("fw_cfg: dma operation {dma_access:x?}: {e:x?}");
             access_resp.set_error(true);
         }
-        if let Err(e) = self.memory.memory().write(
-            &access_resp.0.to_be_bytes(),
-            GuestAddress(dma_address + core::mem::offset_of!(FwCfgDmaAccess, control_be) as u64),
-        ) {
+        // Control field is defined to be on the lowest address, no offset calculation needed
+        if let Err(e) = self
+            .memory
+            .memory()
+            .write(&access_resp.0.to_be_bytes(), GuestAddress(dma_address))
+        {
             error!("fw_cfg: finishing dma: {e:?}");
         }
     }
@@ -800,16 +974,23 @@ impl BusDevice for FwCfg {
                 self.read_data(data);
             }
             (PORT_FW_CFG_DATA, 1) => _ = self.read_data(data),
-            (PORT_FW_CFG_DATA, _) => _ = self.read_data(data, size as u32),
-            (PORT_FW_CFG_DMA_HI, 4) => {
-                let addr = self.dma_address;
-                let addr_hi = (addr >> 32) as u32;
-                data.copy_from_slice(&addr_hi.to_be_bytes());
+            (port, 4) if port >= PORT_FW_CFG_DMA_HI && port <= PORT_FW_CFG_DMA_LO => {
+                let offset_in_port_range = (port - PORT_FW_CFG_DMA_HI) as usize;
+                data.copy_from_slice(
+                    &FW_CFG_DMA_SIGNATURE_CONTENT[offset_in_port_range..offset_in_port_range + 4],
+                );
             }
-            (PORT_FW_CFG_DMA_LO, 4) => {
-                let addr = self.dma_address;
-                let addr_lo = (addr & 0xffff_ffff) as u32;
-                data.copy_from_slice(&addr_lo.to_be_bytes());
+            (port, 2) if port >= PORT_FW_CFG_DMA_HI && port <= PORT_FW_CFG_DMA_LO + 2 => {
+                let offset_in_port_range = (port - PORT_FW_CFG_DMA_HI) as usize;
+                data.copy_from_slice(
+                    &FW_CFG_DMA_SIGNATURE_CONTENT[offset_in_port_range..offset_in_port_range + 2],
+                );
+            }
+            (port, 1) if port >= PORT_FW_CFG_DMA_HI && port <= PORT_FW_CFG_DMA_LO + 3 => {
+                let offset_in_port_range = (port - PORT_FW_CFG_DMA_HI) as usize;
+                data.copy_from_slice(
+                    &FW_CFG_DMA_SIGNATURE_CONTENT[offset_in_port_range].as_bytes(),
+                );
             }
             _ => {
                 debug!(
@@ -840,14 +1021,18 @@ impl BusDevice for FwCfg {
                 let mut buf = [0u8; 4];
                 buf[..size].copy_from_slice(&data[..size]);
                 let val = u32::from_be_bytes(buf);
-                self.dma_address &= 0xffff_ffff;
-                self.dma_address |= (val as u64) << 32;
+                // After each DMA operation `dma_address` is reset to 0. A write to the lower 32 bit
+                // triggers an operation. So when we write the upper 4 bytes the lower 4 will always
+                // be zero. We do not need to handle them here.
+                self.dma_address = (val as u64) << 32;
             }
             (PORT_FW_CFG_DMA_LO, 4) => {
                 let mut buf = [0u8; 4];
                 buf[..size].copy_from_slice(&data[..size]);
                 let val = u32::from_be_bytes(buf);
-                self.dma_address &= !0xffff_ffff;
+                // self.dma_address has either only set the upper 32 bit if we first wrote to the
+                // upper 4 byte or is zero if fw_cfg was reset or finished a DMA operation.
+                // So no need for masking.
                 self.dma_address |= val as u64;
                 self.do_dma();
             }
@@ -932,7 +1117,7 @@ mod unit_tests {
     }
 
     #[test]
-    fn test_initram_fs() {
+    fn test_initram_fs_and_reads_beyond_file_boundary() {
         let gm = GuestMemoryAtomic::new(
             GuestMemoryMmap::from_ranges(&[(GuestAddress(0), RAM_64BIT_START.0 as usize)]).unwrap(),
         );
@@ -947,18 +1132,22 @@ mod unit_tests {
         assert_eq!(written.unwrap(), 21);
         let _ = fw_cfg.add_initramfs_data(temp_file);
 
-        let mut data = vec![0u8];
+        let mut buffer = [0u8; 25];
 
-        let mut initram_iter = (*initram_content).into_iter();
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_INITRD_DATA as u8, 0]);
-        loop {
-            if let Some(char) = initram_iter.next() {
-                fw_cfg.read(0, DATA_OFFSET, &mut data);
-                assert_eq!(data[0], char);
+
+        let max_offset = initram_content.len() as u32;
+        for (offset, byte) in buffer.iter_mut().enumerate() {
+            fw_cfg.read(0, DATA_OFFSET, byte.as_mut_bytes());
+            let expected_offset = if (offset as u32 + 1) < max_offset {
+                offset as u32 + 1
             } else {
-                return;
-            }
+                max_offset
+            };
+            assert_eq!(fw_cfg.data_offset, expected_offset);
         }
+        assert_eq!(&buffer[..initram_content.len()], initram_content);
+        assert_eq!(&buffer[initram_content.len()..], [0; 4]);
     }
 
     #[test]
@@ -985,6 +1174,32 @@ mod unit_tests {
             fw_cfg.read(0, DATA_OFFSET, &mut data);
             assert_eq!(data[0], byte);
         }
+    }
+
+    /// Creates a guest memory mapping and places `FwCfgDmaAccess` at the given address in the guest
+    /// memory. Payload GPA is initialized with a bytes sequence of 0xAC to ensure not accidental
+    /// zero writes happen
+    fn setup_fw_cfg_dma_with_access_control(
+        payload_len: usize,
+        payload_gpa: GuestAddress,
+        dma_gpa: GuestAddress,
+        access_control: AccessControl,
+    ) -> Result<(GuestMemoryMmap<AtomicBitmap>, FwCfg)> {
+        let mem_size = 0x1000;
+        // Create memory regions for the payload and the DmaAccess struct
+        let mem: GuestMemoryMmap<AtomicBitmap> =
+            GuestMemoryMmap::from_ranges(&[(payload_gpa, mem_size), (dma_gpa, mem_size)])
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        let init_data = vec![INIT_BYTE_VALUE; mem_size];
+        let _ = mem
+            .write(init_data.as_bytes(), payload_gpa)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        // Create the fw_cfg device
+        let fw_cfg = FwCfg::new(GuestMemoryAtomic::new(mem.clone()));
+        // Create the FwCfgDmaAccess struct and place it in the guest memory on the given address
+        update_fw_cfg_dma_access(&mem, payload_len, payload_gpa, dma_gpa, access_control)?;
+
+        Ok((mem, fw_cfg))
     }
 
     #[test]
@@ -1100,58 +1315,937 @@ mod unit_tests {
         }
     }
 
-    fn test_dma() {
-        let code = [
+    // helper to update the access control struct in guest memory
+    fn update_fw_cfg_dma_access(
+        guest_mem: &GuestMemoryMmap<AtomicBitmap>,
+        payload_len: usize,
+        payload_gpa: GuestAddress,
+        dma_gpa: GuestAddress,
+        access_control: AccessControl,
+    ) -> Result<()> {
+        let access = FwCfgDmaAccess {
+            control: access_control,
+            length: payload_len as u32,
+            address: payload_gpa.0,
+        };
+        let _ = guest_mem
+            .write(&access.to_be_bytes(), dma_gpa)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_dma_byte_content_transfer() {
+        let payload = [
             0xba, 0xf8, 0x03, 0x00, 0xd8, 0x04, b'0', 0xee, 0xb0, b'\n', 0xee, 0xf4,
         ];
+        let payload_gpa = GuestAddress(0x1000);
+        let dma_gpa = GuestAddress(0x2000);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            payload.len(),
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
 
-        let content = FwCfgContent::Bytes(code.to_vec());
-
-        let mem_size = 0x1000;
-        let load_addr = GuestAddress(0x1000);
-        let mem: GuestMemoryMmap<AtomicBitmap> =
-            GuestMemoryMmap::from_ranges(&[(load_addr, mem_size)]).unwrap();
-
-        // Note: In firmware we would just allocate FwCfgDmaAccess struct
-        // and use address of struct (&) as dma address
-        let mut access_control = AccessControl(0);
-        // bit 1 = read access
-        access_control.set_read(true);
-        // length of data to access
-        let length_be = (code.len() as u32).to_be();
-        // guest address for data
-        let code_address = 0x1900_u64;
-        let address_be = code_address.to_be();
-        let mut access = FwCfgDmaAccess {
-            control_be: access_control.0.to_be(), // bit(1) = read bit
-            length_be,
-            address_be,
-        };
-        // access address is where to put the code
-        let access_address = GuestAddress(load_addr.0);
-        let address_bytes = access_address.0.to_be_bytes();
-        let dma_lo: [u8; 4] = address_bytes[0..4].try_into().unwrap();
-        let dma_hi: [u8; 4] = address_bytes[4..8].try_into().unwrap();
-
-        // writing the FwCfgDmaAccess to mem (this would just be self.dma_access.as_ref() in guest)
-        let _ = mem.write(access.as_mut_bytes(), access_address);
-        let mem_m = GuestMemoryAtomic::new(mem.clone());
-        let mut fw_cfg = FwCfg::new(mem_m);
+        // Add the payload as FwCfg item
+        let content = FwCfgContent::Bytes(payload.to_vec());
         let cfg_item = FwCfgItem {
             name: "code".to_string(),
             content,
         };
-        let _ = fw_cfg.add_item(cfg_item);
+        fw_cfg.add_item(cfg_item).unwrap();
 
+        // Check that the payload is not already stored in guest memory
         let mut data = [0u8; 12];
-
-        let _ = mem.read(&mut data, GuestAddress(code_address));
-        assert_ne!(data, code);
-
+        let _ = mem.read(&mut data, payload_gpa);
+        assert_ne!(data, payload);
+        // Do DMA
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_FILE_FIRST as u8, 0]);
-        fw_cfg.write(0, DMA_OFFSET, &dma_lo);
-        fw_cfg.write(0, DMA_OFFSET + 4, &dma_hi);
-        let _ = mem.read(&mut data, GuestAddress(code_address));
-        assert_eq!(data, code);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the payload is not stored at the target GPA
+        let _ = mem.read(&mut data, payload_gpa);
+        assert_eq!(data, payload);
+    }
+
+    #[test]
+    fn test_dma_32bit_address_handling() {
+        let mut data = [0u8; 4];
+        let payload_addr = GuestAddress(0x0000_2000_u64);
+        let dma_32_bit = GuestAddress(0xFEEA_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_DMA_SIGNATURE_CONTENT.len(),
+            payload_addr,
+            dma_32_bit,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        // Ensure that the signature is not stored at the target location before we actually did DMA
+        let _ = mem.read(data.as_mut_bytes(), payload_addr);
+        assert_ne!(data, FW_CFG_SIGNATURE_CONTENT);
+        // Perform DMA by calling `BusDevice` functions
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_32_bit.0 as u32).to_be_bytes());
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_32_bit);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+        // Check that fw_cfg wrote the correct bytes to the destination GPA
+        let _ = mem.read(data.as_mut_bytes(), payload_addr);
+        assert_eq!(data, FW_CFG_SIGNATURE_CONTENT);
+        // We triggered an operation thus the address should be reset to zero
+        assert_eq!(fw_cfg.dma_address, 0);
+    }
+
+    #[test]
+    fn test_dma_64bit_address_handling() {
+        let payload_addr = GuestAddress(0x0000_2000_u64);
+        let dma_64_bit = GuestAddress(0x1_ACAC_1CC0_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_SIGNATURE_CONTENT.len(),
+            payload_addr,
+            dma_64_bit,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        // Prepare the addresses to write into the DMA registers
+        let address_bytes: [u8; 8] = dma_64_bit.0.to_be_bytes();
+        let addr_hi_bytes: [u8; 4] = address_bytes[0..4].try_into().unwrap();
+        let addr_lo_bytes: [u8; 4] = address_bytes[4..8].try_into().unwrap();
+
+        // Ensure that the signature is not stored at the target location before we actually did DMA
+        let mut data = [0u8; 4];
+        let _ = mem.read(data.as_mut_bytes(), payload_addr);
+        assert_ne!(data, FW_CFG_SIGNATURE_CONTENT);
+        // Perform DMA by calling `BusDevice` functions
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET, &addr_hi_bytes);
+        fw_cfg.write(0, DMA_OFFSET + 4, &addr_lo_bytes);
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(access_buffer.as_mut_bytes(), dma_64_bit);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+        // Check that fw_cfg wrote the correct bytes to the destination GPA
+        let _ = mem.read(data.as_mut_bytes(), payload_addr);
+        assert_eq!(data, FW_CFG_SIGNATURE_CONTENT);
+        // We triggered an operation thus the address should be reset to zero
+        assert_eq!(fw_cfg.dma_address, 0);
+    }
+
+    #[test]
+    fn test_dma_skip_bytes() {
+        let payload_gpa = GuestAddress(0x0000_2000_u64);
+        let dma_gpa = GuestAddress(0xFEEA_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_SIGNATURE_CONTENT.len(),
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new(),
+        )
+        .unwrap();
+
+        let mut data = [0u8; 2];
+        // Prepare to skip the first 4 bytes and ensure the offset is set accordingly
+        update_fw_cfg_dma_access(
+            &mem,
+            2,
+            payload_gpa,
+            dma_gpa,
+            AccessControl(0).with_skip(true),
+        )
+        .unwrap();
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        assert_eq!(fw_cfg.data_offset, 2);
+        // Check that the memory is still contains the initial value
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(data, [INIT_BYTE_VALUE; 2]);
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+
+        // Now read the last 4 bytes. This ensures a single read command doesn't reset the offset
+        update_fw_cfg_dma_access(
+            &mem,
+            4,
+            payload_gpa,
+            dma_gpa,
+            AccessControl(0).with_read(true),
+        )
+        .unwrap();
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the data read is the data expected
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa);
+        assert_eq!(data, FW_CFG_SIGNATURE_CONTENT[2..]);
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
+
+        update_fw_cfg_dma_access(
+            &mem,
+            4,
+            payload_gpa,
+            dma_gpa,
+            AccessControl(0).with_skip(true),
+        )
+        .unwrap();
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_dma_no_control_bits_is_valid_no_op() {
+        const OFFSET_INIT: u32 = 0x1234_5678_u32;
+        const SELECTOR_INIT: u16 = 0xABCD_u16;
+        let payload_gpa = GuestAddress(0x0000_2000_u64);
+        let dma_gpa = GuestAddress(0xFEEA_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_DMA_SIGNATURE_CONTENT.len(),
+            payload_gpa,
+            dma_gpa,
+            AccessControl(0).with_selector(0xABCD),
+        )
+        .unwrap();
+        // Write some data in the FwCfg register to verify none is overwritten
+        fw_cfg.data_offset = OFFSET_INIT;
+        fw_cfg.selector = SELECTOR_INIT;
+        // Do DMA access with no operation bit set -> should result in no-op
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that fw_cfg state didn't change
+        assert_eq!(fw_cfg.data_offset, OFFSET_INIT);
+        assert_eq!(fw_cfg.selector, SELECTOR_INIT);
+        // Check that the control field is reset to zero
+        // This also means that the error bit must not be set
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+        // Check that the memory is still contains the initial value
+        let mut data = [0x0_u8; 8];
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(data, [INIT_BYTE_VALUE; 8]);
+    }
+
+    #[test]
+    fn test_dma_select_through_selector_field_works() {
+        let payload_gpa = GuestAddress(0x0000_2000_u64);
+        let dma_gpa = GuestAddress(0xFEEA_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_DMA_SIGNATURE_CONTENT.len(),
+            payload_gpa,
+            dma_gpa,
+            AccessControl(0).with_select(true).with_selector(0x10),
+        )
+        .unwrap();
+        // After initialization the selector field must be 0
+        assert_eq!(fw_cfg.selector, 0);
+        fw_cfg.data_offset = 0x10;
+        // Do DMA access only setting the selector field
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        assert_eq!(fw_cfg.selector, 0x10);
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+        // Data offset has been reset
+        assert_eq!(fw_cfg.data_offset, 0);
+    }
+
+    #[test]
+    fn dma_access_control_bits_map_correctly() {
+        // No bits set
+        let ac = AccessControl(0x0000_0000);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.selector(), 0);
+
+        // only error bit is set
+        let ac = AccessControl(0x0000_0001);
+        assert_eq!(ac.error(), true);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0);
+
+        // only read bit is set
+        let ac = AccessControl(0x0000_0002);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), true);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0);
+
+        // only skip bit is set
+        let ac = AccessControl(0x0000_0004);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), true);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0);
+
+        // only select bit is set
+        let ac = AccessControl(0x0000_0008);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.select(), true);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0);
+
+        // only write bit is set
+        let ac = AccessControl(0x0000_0010);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.write(), true);
+        assert_eq!(ac.selector(), 0);
+
+        // only selector bits are set
+        let ac = AccessControl(0xACAC_0000);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0xACAC);
+
+        // all access bits and selector are set
+        let ac = AccessControl(0xACAC_001F);
+        assert_eq!(ac.error(), true);
+        assert_eq!(ac.read(), true);
+        assert_eq!(ac.skip(), true);
+        assert_eq!(ac.select(), true);
+        assert_eq!(ac.write(), true);
+        assert_eq!(ac.selector(), 0xACAC);
+
+        // Padding bits do not effect any other bits
+        let ac = AccessControl(0x000_FFE0);
+        assert_eq!(ac.error(), false);
+        assert_eq!(ac.read(), false);
+        assert_eq!(ac.skip(), false);
+        assert_eq!(ac.select(), false);
+        assert_eq!(ac.write(), false);
+        assert_eq!(ac.selector(), 0x0);
+    }
+
+    #[test]
+    fn test_fw_cfg_dma_access_from_wire() {
+        let expected_control = 0x6767_6767_u32;
+        let expected_length = 0x8989_8989_u32;
+        let expected_address = 0xBCBC_BCBC_DEDE_DEDE_u64;
+
+        let mut buffer = [0_u8; FwCfgDmaAccess::WIRE_SIZE];
+        buffer[0..4].copy_from_slice(&expected_control.to_be_bytes());
+        buffer[4..8].copy_from_slice(&expected_length.to_be_bytes());
+        buffer[8..16].copy_from_slice(&expected_address.to_be_bytes());
+
+        let access = FwCfgDmaAccess::from_be_bytes(&buffer);
+        assert_eq!(access.control.0, expected_control);
+        assert_eq!(access.length, expected_length);
+        assert_eq!(access.address, expected_address);
+    }
+
+    #[test]
+    fn test_fw_cfg_dma_access_to_wire() {
+        let expected_control = 0x6767_6767_u32;
+        let expected_length = 0x8989_8989_u32;
+        let expected_address = 0xBCBC_BCBC_DEDE_DEDE_u64;
+
+        let access = FwCfgDmaAccess {
+            control: AccessControl(expected_control),
+            length: expected_length,
+            address: expected_address,
+        };
+
+        let mut buffer = [0_u8; FwCfgDmaAccess::WIRE_SIZE];
+        buffer.copy_from_slice(&access.to_be_bytes());
+        assert_eq!(buffer[0..4], expected_control.to_be_bytes());
+        assert_eq!(buffer[4..8], expected_length.to_be_bytes());
+        assert_eq!(buffer[8..16], expected_address.to_be_bytes());
+    }
+
+    #[test]
+    fn test_dma_boundary_crossing_dma_access_structure_triggers_error() {
+        // We test the case that the address for the FwCfgDmaAccess structure
+        // points to the last 4 bytes of a writable guest memory region. So
+        // reading the whole 16-byte structure fails but writing the control
+        // field still is possible.
+        let payload_addr = GuestAddress(0x0000_2000_u64);
+        let dma_32_bit = GuestAddress(0x4000_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_DMA_SIGNATURE_CONTENT.len(),
+            payload_addr,
+            dma_32_bit,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        // Perform DMA by calling `BusDevice` functions
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(0x5000_u32 - 4).to_be_bytes());
+        let mut access_buffer = [0_u8; 16];
+        // Only read 4 bytes at the end of the guest memory
+        let bytes_read = mem
+            .read(&mut access_buffer, GuestAddress(0x5000_u64 - 4))
+            .unwrap();
+        assert_eq!(bytes_read, 4_usize);
+        // Check that the control field is reset to with only the error bit set
+        assert_eq!(
+            FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0,
+            0x1_u32
+        );
+    }
+
+    #[test]
+    fn test_dma_read_exceeds_item_length() {
+        const DATA_BUFFER_LEN: usize = FwCfg::BUFFER_SIZE * 3;
+        let payload_gpa = GuestAddress(0x2000_u64);
+        let dma_gpa = GuestAddress(0x4000_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            DATA_BUFFER_LEN, /* Defines the DMA read length */
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        let mut data = [INIT_BYTE_VALUE; DATA_BUFFER_LEN];
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the item was read and remaining bytes set to 0
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(
+            data[0..FW_CFG_SIGNATURE_CONTENT.len()],
+            FW_CFG_SIGNATURE_CONTENT
+        );
+        assert_eq!(
+            data[FW_CFG_SIGNATURE_CONTENT.len()..],
+            [0; DATA_BUFFER_LEN - FW_CFG_SIGNATURE_CONTENT.len()]
+        );
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+        assert_eq!(fw_cfg.data_offset as usize, FW_CFG_SIGNATURE_CONTENT.len());
+    }
+
+    #[test]
+    fn test_dma_read_guest_buffer_boundaries_respected() {
+        const DATA_BUFFER_LEN: usize = FwCfg::BUFFER_SIZE * 3 + 512;
+        let payload_gpa = GuestAddress(0x2000_u64);
+        let dma_gpa = GuestAddress(0x4000_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            DATA_BUFFER_LEN, /* Defines the DMA read length */
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        let mut data = [0xCC; 0x1000];
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the item was read and remaining bytes set to 0
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(
+            data[0..FW_CFG_SIGNATURE_CONTENT.len()],
+            FW_CFG_SIGNATURE_CONTENT
+        );
+        assert_eq!(
+            data[FW_CFG_SIGNATURE_CONTENT.len()..DATA_BUFFER_LEN],
+            [0; DATA_BUFFER_LEN - FW_CFG_SIGNATURE_CONTENT.len()]
+        );
+        assert_eq!(
+            data[DATA_BUFFER_LEN..],
+            [INIT_BYTE_VALUE; 0x1000 - DATA_BUFFER_LEN]
+        );
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+        assert_eq!(fw_cfg.data_offset as usize, FW_CFG_SIGNATURE_CONTENT.len());
+    }
+
+    #[test]
+    fn test_dma_read_invalid_selector() {
+        // If we encounter an invalid selector we expect fw_cfg to successfully override the entire
+        // guest buffer with 0 and return success.
+        const DATA_BUFFER_LEN: usize = FwCfg::BUFFER_SIZE;
+        const CANARY_VALUE: u8 = 0xCC;
+        let payload_gpa = GuestAddress(0x2000_u64);
+        let dma_gpa = GuestAddress(0x4000_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            DATA_BUFFER_LEN, /* Defines the DMA read length */
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        let mut data = [CANARY_VALUE; 0x1000];
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[255 as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the item was read and remaining bytes set to 0
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(data[..DATA_BUFFER_LEN], [0; DATA_BUFFER_LEN]);
+        // Check that fw_cfg didn't touch any bytes behind the specified range
+        assert_eq!(
+            data[DATA_BUFFER_LEN..],
+            [INIT_BYTE_VALUE; 0x1000 - DATA_BUFFER_LEN]
+        );
+        assert_eq!(fw_cfg.data_offset, 0);
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+        assert_eq!(fw_cfg.data_offset, 0);
+    }
+
+    #[test]
+    fn test_dma_read_exceeds_guest_mem() {
+        const DATA_BUFFER_LEN: usize = FwCfg::BUFFER_SIZE;
+        const CANARY_VALUE: u8 = 0xCC;
+        let payload_gpa_start = GuestAddress(0x2000_u64);
+        let dma_gpa = GuestAddress(0x4000_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            0x1000, /* Defines the DMA read length */
+            payload_gpa_start,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+        // Move the address of the DMA target to the middle of the allocated page. We will be able
+        // to write the first half of the page but not the second half.
+        let payload_gpa = GuestAddress(payload_gpa_start.0.checked_add(0xD00).unwrap());
+        update_fw_cfg_dma_access(
+            &mem,
+            DATA_BUFFER_LEN,
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        let mut data = [CANARY_VALUE; 0x1000];
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the item was read and remaining bytes set to 0
+        let l = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(l, 0x1000 - 0xd00);
+        assert_eq!(
+            data[0..FW_CFG_SIGNATURE_CONTENT.len()],
+            FW_CFG_SIGNATURE_CONTENT
+        );
+        assert_eq!(
+            data[FW_CFG_SIGNATURE_CONTENT.len()..0x1000 - 0xd00],
+            [0; 0x1000 - 0xd00 - FW_CFG_SIGNATURE_CONTENT.len()]
+        );
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(
+            FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0,
+            AccessControl(0).with_error(true).0
+        );
+    }
+
+    #[test]
+    fn test_dma_read_item_partly() {
+        const DATA_BUFFER_LEN: usize = 4;
+        let payload_gpa = GuestAddress(0x2000_u64);
+        let dma_gpa = GuestAddress(0x4000_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            DATA_BUFFER_LEN, /* Defines the DMA read length */
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        let mut data = [INIT_BYTE_VALUE; DATA_BUFFER_LEN];
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the item was read and remaining bytes set to 0
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(data, FW_CFG_SIGNATURE_CONTENT[..DATA_BUFFER_LEN]);
+        assert_eq!(fw_cfg.data_offset, DATA_BUFFER_LEN as u32);
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+    }
+
+    #[test]
+    fn test_dma_read_cursor_properly_advances_if_remaining_bytes_less_than_buffer() {
+        const DMA_LEN: usize = FwCfg::BUFFER_SIZE + 1;
+        let payload_bytes = [0xEF_u8; FwCfg::BUFFER_SIZE * 6];
+        let payload_gpa = GuestAddress(0x2000_u64);
+        let dma_gpa = GuestAddress(0x4000_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            DMA_LEN, /* Defines the DMA read length */
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        // Add the payloads as FwCfg item
+        let content = FwCfgContent::Bytes(payload_bytes[0..FwCfg::BUFFER_SIZE * 2].to_vec());
+        let cfg_item = FwCfgItem {
+            name: "small_payload".to_string(),
+            content,
+        };
+        fw_cfg.add_item(cfg_item).unwrap();
+
+        let content = FwCfgContent::Bytes(payload_bytes.to_vec());
+        let cfg_item = FwCfgItem {
+            name: "big_payload".to_string(),
+            content,
+        };
+        fw_cfg.add_item(cfg_item).unwrap();
+
+        let mut data = [INIT_BYTE_VALUE; DMA_LEN];
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_FILE_FIRST as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the item was read and remaining bytes set to 0
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(data, payload_bytes[..DMA_LEN]);
+        assert_eq!(fw_cfg.data_offset, DMA_LEN as u32);
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+
+        update_fw_cfg_dma_access(
+            &mem,
+            FwCfg::BUFFER_SIZE * 6,
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+        let mut data = [INIT_BYTE_VALUE; FwCfg::BUFFER_SIZE * 6];
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_FILE_FIRST as u8 + 1, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the item was read and remaining bytes set to 0
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(data[..0x1000], payload_bytes[..0x1000]);
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0x1);
+        assert_eq!(fw_cfg.data_offset, (FwCfg::BUFFER_SIZE * 6) as u32);
+
+        update_fw_cfg_dma_access(
+            &mem,
+            FwCfg::BUFFER_SIZE * 6,
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+        let mut data = [INIT_BYTE_VALUE; FwCfg::BUFFER_SIZE * 6];
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_FILE_FIRST as u8 + 1, 0]);
+        fw_cfg.data_offset = 8;
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        // Check that the item was read and remaining bytes set to 0
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(data[..0x1000], payload_bytes[..0x1000]);
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0x1);
+        assert_eq!(fw_cfg.data_offset, (FwCfg::BUFFER_SIZE * 6) as u32);
+    }
+
+    #[test]
+    fn test_dma_set_cursor_beyond_content() {
+        let payload_gpa = GuestAddress(0x0000_2000_u64);
+        let dma_gpa = GuestAddress(0xFEEA_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            FW_CFG_SIGNATURE_CONTENT.len() + 2,
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_skip(true),
+        )
+        .unwrap();
+
+        // use the selector register to save one fwCfgDmaAccess update cycle
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
+
+        let mut data = [0xCC; 0x1000];
+        // Prepare to skip the first 4 bytes and ensure the offset is set accordingly
+        update_fw_cfg_dma_access(
+            &mem,
+            0x800,
+            payload_gpa,
+            dma_gpa,
+            AccessControl(0).with_read(true),
+        )
+        .unwrap();
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        assert_eq!(
+            fw_cfg.data_offset,
+            u32::try_from(FW_CFG_SIGNATURE_CONTENT.len()).unwrap()
+        );
+
+        let _ = mem.read(data.as_mut_bytes(), payload_gpa).unwrap();
+        assert_eq!(data[..0x800], [0x0; 0x800]);
+        assert_eq!(data[0x800..], [INIT_BYTE_VALUE; 0x800]);
+
+        // Check that the memory is still contains the initial value
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0);
+    }
+
+    #[test]
+    fn test_dma_invalid_memory_cursor_does_not_advance_over_payload_length() {
+        let payload_gpa = GuestAddress(0x2000_u64);
+        let dma_gpa = GuestAddress(0x4000_u64);
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            0x1000, /* Defines the DMA read length */
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        update_fw_cfg_dma_access(
+            &mem,
+            0x1000,
+            GuestAddress(0x6000),
+            dma_gpa,
+            AccessControl(0).with_read(true),
+        )
+        .unwrap();
+
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        assert_eq!(fw_cfg.data_offset, FW_CFG_SIGNATURE_CONTENT.len() as u32);
+        // Check that the control field is reset to zero
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0x1);
+    }
+
+    #[test]
+    fn test_dma_read_short_guest_write_advances_cursor_to_planned_end() {
+        const DMA_LEN: usize = (FwCfg::BUFFER_SIZE * 2) + 0x20;
+        let payload_bytes = [0xEF_u8; DMA_LEN];
+        let payload_page_gpa = GuestAddress(0x2000_u64);
+        let dma_gpa = GuestAddress(0x4000_u64);
+
+        // Set skip to 8
+        let (mem, mut fw_cfg) = setup_fw_cfg_dma_with_access_control(
+            8, /* Defines the DMA skip length */
+            payload_page_gpa,
+            dma_gpa,
+            AccessControl::new().with_skip(true),
+        )
+        .unwrap();
+
+        // Add an item to fw_cfg
+        let content = FwCfgContent::Bytes(payload_bytes.to_vec());
+        let cfg_item = FwCfgItem {
+            name: "big_payload".to_string(),
+            content,
+        };
+        fw_cfg.add_item(cfg_item).unwrap();
+        // select and advance cursor through executing the skip defined above
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_FILE_FIRST as u8, 0]);
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+
+        // Update the FwCfgDmaAccess so that we produce an error for the last 16 byte
+        let payload_gpa = GuestAddress(payload_page_gpa.0 + 0x1000 - (DMA_LEN as u64) + 0x18);
+        update_fw_cfg_dma_access(
+            &mem,
+            DMA_LEN - 0x10,
+            payload_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+
+        let mut data = [0xCB; 0x1000];
+        // Execute failing read
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+
+        // Read the entire allocated page
+        let _ = mem.read(data.as_mut_bytes(), payload_page_gpa).unwrap();
+        // Ensure bytes up to the target GPA were not touched
+        assert_eq!(
+            data[..0x1000 - DMA_LEN + 0x18],
+            [INIT_BYTE_VALUE; 0x1000 - DMA_LEN + 0x18]
+        );
+        // Ensure the payload was written until the failing write
+        assert_eq!(data[0x1000 + 0x18 - DMA_LEN..], [0xEF; DMA_LEN - 0x18]);
+        // Nevertheless the cursor should indicate we read all but the last 8 bytes
+        assert_eq!(fw_cfg.data_offset, DMA_LEN as u32 - 0x8);
+        // Check that the control field is reset to zero but contains the error bit
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0x1);
+
+        // Let's get the remaining 8 bytes!
+        update_fw_cfg_dma_access(
+            &mem,
+            FwCfg::BUFFER_SIZE,
+            payload_page_gpa,
+            dma_gpa,
+            AccessControl::new().with_read(true),
+        )
+        .unwrap();
+        fw_cfg.write(0, DMA_OFFSET + 4, &(dma_gpa.0 as u32).to_be_bytes());
+        let mut data = [0xCB_u8; FwCfg::BUFFER_SIZE];
+        // Read the entire allocated page
+        let _ = mem.read(data.as_mut_bytes(), payload_page_gpa).unwrap();
+        // Ensure the first 8 bytes read contain the payload
+        assert_eq!(data[..0x08], [0xEF; 0x08]);
+        assert_eq!(data[0x08..], [0x0; FwCfg::BUFFER_SIZE - 0x08]);
+
+        // This time the cursor should indicate we read all bytes
+        assert_eq!(fw_cfg.data_offset, DMA_LEN as u32);
+        // Check that the control field is reset to zero, this time with no error
+        let mut access_buffer = FwCfgDmaAccess {
+            control: AccessControl(0xFFFF_FFFF),
+            ..Default::default()
+        }
+        .to_be_bytes();
+        let _ = mem.read(&mut access_buffer, dma_gpa);
+        assert_eq!(FwCfgDmaAccess::from_be_bytes(&access_buffer).control.0, 0x0);
+    }
+
+    #[test]
+    fn test_dma_signature() {
+        let mut fw_cfg = FwCfg::new(GuestMemoryAtomic::new(GuestMemoryMmap::new()));
+
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
+        let mut buff = [0xDD_u8; 4];
+        fw_cfg.read(0, DMA_OFFSET, &mut buff);
+        assert_eq!(*b"QEMU", buff);
+        let mut buff = [0xDD_u8; 1];
+        fw_cfg.read(0, DMA_OFFSET, &mut buff);
+        assert_eq!(*b"Q", buff);
+        let mut buff = [0xDD_u8; 4];
+        fw_cfg.read(0, DMA_OFFSET + 2, &mut buff);
+        assert_eq!(*b"MU C", buff);
+        let mut buff = [0xDD_u8; 4];
+        fw_cfg.read(0, DMA_OFFSET + 4, &mut buff);
+        assert_eq!(*b" CFG", buff);
+        let mut buff = [0xDD_u8; 2];
+        fw_cfg.read(0, DMA_OFFSET + 4, &mut buff);
+        assert_eq!(*b" C", buff);
+        let mut buff = [0xDD_u8; 2];
+        fw_cfg.read(0, DMA_OFFSET + 6, &mut buff);
+        assert_eq!(*b"FG", buff);
+        let mut buff = [0xDD_u8; 1];
+        fw_cfg.read(0, DMA_OFFSET + 7, &mut buff);
+        assert_eq!(*b"G", buff);
     }
 }
