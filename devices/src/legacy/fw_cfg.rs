@@ -804,7 +804,9 @@ impl BusDevice for FwCfg {
                 // treats a 1-byte read at this offset as a data read. Bypass to mimic QEMU quirk.
                 self.read_data(data);
             }
-            (PORT_FW_CFG_DATA, 1) => _ = self.read_data(data),
+            // TODO: For now we need to allow arbitrary length reads from DATA because we cannot
+            // distinguish between on one multi byte long read and multiple single-byte reads.
+            (PORT_FW_CFG_DATA, _) => _ = self.read_data(data),
             (PORT_FW_CFG_DMA_HI, 4) => {
                 let addr = self.dma_address;
                 let addr_hi = (addr >> 32) as u32;
@@ -1053,16 +1055,6 @@ mod unit_tests {
         // Reads with unsupported size zero the whole buffer in QEMU. We mimic this behavior.
         let mut fw_cfg = FwCfg::new(GuestMemoryAtomic::new(GuestMemoryMmap::new()));
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_SIGNATURE as u8, 0]);
-        // Two byte read forbidden
-        let mut buff = [0xEF; 2];
-        fw_cfg.read(0, DATA_OFFSET, &mut buff);
-        assert_eq!(fw_cfg.data_offset, 0);
-        assert_eq!(buff, [0x0; 2]);
-        // 4-byte read forbidden
-        let mut buff = [0xEF; 4];
-        fw_cfg.read(0, DATA_OFFSET, &mut buff);
-        assert_eq!(buff, [0x0; 4]);
-        assert_eq!(fw_cfg.data_offset, 0);
         // 1-byte read returns actual data
         let mut buff = [0xEF; 1];
         fw_cfg.read(0, DATA_OFFSET, &mut buff);
