@@ -1208,11 +1208,12 @@ impl Vm {
     ) -> Result<()> {
         let mut e820_option: Option<usize> = None;
         if fw_cfg_config.e820 {
-            e820_option = Some(config.lock().unwrap().memory.size as usize);
+            e820_option = Some(self.config.lock().unwrap().memory.size as usize);
         }
         let mut kernel_option: Option<File> = None;
         if fw_cfg_config.kernel {
-            let kernel = config
+            let kernel = self
+                .config
                 .lock()
                 .unwrap()
                 .payload
@@ -1226,9 +1227,9 @@ impl Vm {
         let mut cmdline_option: Option<std::ffi::CString> = None;
         if fw_cfg_config.cmdline {
             let cmdline = Vm::generate_cmdline(
-                config.lock().unwrap().payload.as_ref().unwrap(),
+                self.config.lock().unwrap().payload.as_ref().unwrap(),
                 #[cfg(target_arch = "aarch64")]
-                device_manager,
+                self.device_manager,
             )
             .map_err(|_| Error::MissingFwCfgCmdline)?
             .as_cstring()
@@ -1237,7 +1238,8 @@ impl Vm {
         }
         let mut initramfs_option: Option<File> = None;
         if fw_cfg_config.initramfs {
-            let initramfs = config
+            let initramfs = self
+                .config
                 .lock()
                 .unwrap()
                 .payload
@@ -1274,7 +1276,7 @@ impl Vm {
             fw_cfg_item_list_option = Some(fw_cfg_item_list);
         }
 
-        let device_manager_binding = device_manager.lock().unwrap();
+        let device_manager_binding = self.device_manager.lock().unwrap();
         let Some(fw_cfg) = device_manager_binding.fw_cfg() else {
             return Err(Error::FwCfgDisabled);
         };
@@ -2899,10 +2901,8 @@ impl Vm {
                     }
                 };
 
-                Self::populate_fw_cfg(
+                self.populate_fw_cfg(
                     &fw_cfg_config,
-                    &self.device_manager,
-                    &self.config,
                     #[cfg(target_arch = "x86_64")]
                     kvm_sev_snp_enabled,
                 )?;
