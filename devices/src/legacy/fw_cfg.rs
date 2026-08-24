@@ -81,6 +81,7 @@ pub const PORT_FW_CFG_WIDTH: u64 = 0x10;
 const FW_CFG_SIGNATURE: u16 = 0x00;
 const FW_CFG_ID: u16 = 0x01;
 const FW_CFG_UUID: u16 = 0x02;
+const FW_CFG_RAM_SIZE: u16 = 0x03;
 const FW_CFG_KERNEL_SIZE: u16 = 0x08;
 const FW_CFG_INITRD_SIZE: u16 = 0x0b;
 const FW_CFG_KERNEL_DATA: u16 = 0x11;
@@ -194,6 +195,7 @@ pub struct FwCfgItem {
 #[derive(Debug, Default)]
 pub struct FwCfgInit {
     pub uuid: [u8; 16],
+    pub memory_size: u64,
 }
 
 #[cfg(all(feature = "fw_cfg", target_arch = "aarch64"))]
@@ -508,6 +510,7 @@ impl FwCfg {
         }
 
         self.known_items[FW_CFG_UUID as usize] = FwCfgContent::Bytes(fw_cfg_init.uuid.to_vec());
+        self.known_items[FW_CFG_RAM_SIZE as usize] = FwCfgContent::U64(fw_cfg_init.memory_size);
         Ok(())
     }
 
@@ -995,6 +998,45 @@ mod unit_tests {
         assert_eq!(fw_cfg.data_offset, 16);
         assert_eq!(expected_uuid_bytes, result_bytes[0..16]);
         assert_eq!([0x0; 1], result_bytes[16..]);
+    }
+
+    #[test]
+    fn test_cfg_memory_size() {
+        let gm = GuestMemoryAtomic::new(
+            GuestMemoryMmap::from_ranges(&[(GuestAddress(0), RAM_64BIT_START.0 as usize)]).unwrap(),
+        );
+
+        let mut fw_cfg = FwCfg::new(gm);
+        let expected_memory_size = 0x1122_3344_5566_7788;
+
+        fw_cfg
+            .populate_fw_cfg(
+                None,
+                None,
+                None,
+                None,
+                None,
+                &FwCfgInit {
+                    memory_size: expected_memory_size,
+                    ..Default::default()
+                },
+                #[cfg(target_arch = "x86_64")]
+                false,
+            )
+            .unwrap();
+
+        // We read intentionally one more byte to check that reading beyond EOF returns zero.
+        let mut result_bytes = [0xCD_u8; 9];
+
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_RAM_SIZE as u8, 0]);
+        assert_eq!(fw_cfg.selector, FW_CFG_RAM_SIZE);
+
+        for byte in result_bytes.as_mut_slice() {
+            fw_cfg.read(0, DATA_OFFSET, byte.as_mut_bytes());
+        }
+        assert_eq!(fw_cfg.data_offset, 8);
+        assert_eq!(expected_memory_size.to_le_bytes(), result_bytes[0..8]);
+        assert_eq!([0x0; 1], result_bytes[8..]);
     }
 
     #[test]
