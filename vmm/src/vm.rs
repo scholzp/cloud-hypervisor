@@ -1302,6 +1302,7 @@ impl Vm {
                 Uuid::nil().as_bytes().to_owned()
             },
             memory_size: vm_config.memory.size,
+            no_graphics: true,
         };
 
         fw_cfg

@@ -82,6 +82,7 @@ const FW_CFG_SIGNATURE: u16 = 0x00;
 const FW_CFG_ID: u16 = 0x01;
 const FW_CFG_UUID: u16 = 0x02;
 const FW_CFG_RAM_SIZE: u16 = 0x03;
+const FW_CFG_NOGRAPHIC: u16 = 0x04;
 const FW_CFG_KERNEL_SIZE: u16 = 0x08;
 const FW_CFG_INITRD_SIZE: u16 = 0x0b;
 const FW_CFG_KERNEL_DATA: u16 = 0x11;
@@ -196,6 +197,7 @@ pub struct FwCfgItem {
 pub struct FwCfgInit {
     pub uuid: [u8; 16],
     pub memory_size: u64,
+    pub no_graphics: bool,
 }
 
 #[cfg(all(feature = "fw_cfg", target_arch = "aarch64"))]
@@ -511,6 +513,8 @@ impl FwCfg {
 
         self.known_items[FW_CFG_UUID as usize] = FwCfgContent::Bytes(fw_cfg_init.uuid.to_vec());
         self.known_items[FW_CFG_RAM_SIZE as usize] = FwCfgContent::U64(fw_cfg_init.memory_size);
+        self.known_items[FW_CFG_NOGRAPHIC as usize] =
+            FwCfgContent::U16(u16::from(fw_cfg_init.no_graphics));
         Ok(())
     }
 
@@ -1037,6 +1041,45 @@ mod unit_tests {
         assert_eq!(fw_cfg.data_offset, 8);
         assert_eq!(expected_memory_size.to_le_bytes(), result_bytes[0..8]);
         assert_eq!([0x0; 1], result_bytes[8..]);
+    }
+
+    #[test]
+    fn test_cfg_nographic() {
+        let gm = GuestMemoryAtomic::new(
+            GuestMemoryMmap::from_ranges(&[(GuestAddress(0), RAM_64BIT_START.0 as usize)]).unwrap(),
+        );
+
+        let mut fw_cfg = FwCfg::new(gm);
+        let expected_nographic_value = 0x1_u16;
+
+        fw_cfg
+            .populate_fw_cfg(
+                None,
+                None,
+                None,
+                None,
+                None,
+                &FwCfgInit {
+                    no_graphics: true,
+                    ..Default::default()
+                },
+                #[cfg(target_arch = "x86_64")]
+                false,
+            )
+            .unwrap();
+
+        // We read intentionally one more byte to check that reading beyond EOF returns zero.
+        let mut result_bytes = [0xCD_u8; 3];
+
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_NOGRAPHIC as u8, 0]);
+        assert_eq!(fw_cfg.selector, FW_CFG_NOGRAPHIC);
+
+        for byte in result_bytes.as_mut_slice() {
+            fw_cfg.read(0, DATA_OFFSET, byte.as_mut_bytes());
+        }
+        assert_eq!(fw_cfg.data_offset, 2);
+        assert_eq!(expected_nographic_value.to_le_bytes(), result_bytes[0..2]);
+        assert_eq!([0x0; 1], result_bytes[2..]);
     }
 
     #[test]
