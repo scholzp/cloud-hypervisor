@@ -38,7 +38,7 @@ use devices::AcpiNotificationFlags;
 #[cfg(target_arch = "aarch64")]
 use devices::interrupt_controller;
 #[cfg(feature = "fw_cfg")]
-use devices::legacy::fw_cfg::FwCfgItem;
+use devices::legacy::fw_cfg::{FwCfgInit, FwCfgItem};
 use event_monitor::event;
 #[cfg(all(target_arch = "aarch64", feature = "guest_debug"))]
 use gdbstub_arch::aarch64::reg::AArch64CoreRegs as CoreRegs;
@@ -395,6 +395,10 @@ pub enum Error {
     #[cfg(feature = "fw_cfg")]
     #[error("Error using fw_cfg while disabled")]
     FwCfgDisabled,
+
+    #[cfg(feature = "fw_cfg")]
+    #[error("Error parsing the VM's UUID")]
+    FwCfgInvalidUuid,
 }
 pub type Result<T> = result::Result<T, Error>;
 
@@ -1201,11 +1205,12 @@ impl Vm {
 
     #[cfg(feature = "fw_cfg")]
     fn populate_fw_cfg(
+        &self,
         fw_cfg_config: &FwCfgConfig,
-        device_manager: &Arc<Mutex<DeviceManager>>,
-        config: &Arc<Mutex<VmConfig>>,
         #[cfg(target_arch = "x86_64")] kvm_sev_snp_enabled: bool,
     ) -> Result<()> {
+        use uuid::Uuid;
+
         let mut e820_option: Option<usize> = None;
         if fw_cfg_config.e820 {
             e820_option = Some(self.config.lock().unwrap().memory.size as usize);
@@ -1281,6 +1286,23 @@ impl Vm {
             return Err(Error::FwCfgDisabled);
         };
 
+        let vm_config = self.config.lock().unwrap();
+        let init = FwCfgInit {
+            uuid: if let Some(platform_config) = vm_config.platform.as_ref() {
+                platform_config
+                    .system_uuid
+                    .as_ref()
+                    .map(|s| Uuid::parse_str(&s))
+                    .transpose()
+                    .map_err(|_| Error::FwCfgInvalidUuid)?
+                    .unwrap_or(Uuid::nil())
+                    .as_bytes()
+                    .clone()
+            } else {
+                Uuid::nil().as_bytes().to_owned()
+            },
+        };
+
         fw_cfg
             .lock()
             .unwrap()
@@ -1290,6 +1312,7 @@ impl Vm {
                 initramfs_option,
                 cmdline_option,
                 fw_cfg_item_list_option,
+                &init,
                 #[cfg(target_arch = "x86_64")]
                 kvm_sev_snp_enabled,
             )

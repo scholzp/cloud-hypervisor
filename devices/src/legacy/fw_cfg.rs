@@ -80,6 +80,7 @@ pub const PORT_FW_CFG_WIDTH: u64 = 0x10;
 
 const FW_CFG_SIGNATURE: u16 = 0x00;
 const FW_CFG_ID: u16 = 0x01;
+const FW_CFG_UUID: u16 = 0x02;
 const FW_CFG_KERNEL_SIZE: u16 = 0x08;
 const FW_CFG_INITRD_SIZE: u16 = 0x0b;
 const FW_CFG_KERNEL_DATA: u16 = 0x11;
@@ -188,6 +189,11 @@ impl FwCfgContent {
 pub struct FwCfgItem {
     pub name: String,
     pub content: FwCfgContent,
+}
+
+#[derive(Debug, Default)]
+pub struct FwCfgInit {
+    pub uuid: [u8; 16],
 }
 
 #[cfg(all(feature = "fw_cfg", target_arch = "aarch64"))]
@@ -476,6 +482,7 @@ impl FwCfg {
         initramfs: Option<File>,
         cmdline: Option<std::ffi::CString>,
         fw_cfg_item_list: Option<Vec<FwCfgItem>>,
+        fw_cfg_init: &FwCfgInit,
         #[cfg(target_arch = "x86_64")] kvm_sev_snp_enabled: bool,
     ) -> Result<()> {
         if let Some(mem_size) = mem_size {
@@ -499,6 +506,8 @@ impl FwCfg {
                 self.add_item(item)?;
             }
         }
+
+        self.known_items[FW_CFG_UUID as usize] = FwCfgContent::Bytes(fw_cfg_init.uuid.to_vec());
         Ok(())
     }
 
@@ -944,6 +953,48 @@ mod unit_tests {
                 return;
             }
         }
+    }
+
+    #[test]
+    fn test_cfg_uuid() {
+        let gm = GuestMemoryAtomic::new(
+            GuestMemoryMmap::from_ranges(&[(GuestAddress(0), RAM_64BIT_START.0 as usize)]).unwrap(),
+        );
+
+        let mut fw_cfg = FwCfg::new(gm);
+        let expected_uuid_bytes = [
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xFF,
+            0xBC, 0xFE,
+        ];
+
+        fw_cfg
+            .populate_fw_cfg(
+                None,
+                None,
+                None,
+                None,
+                None,
+                &FwCfgInit {
+                    uuid: expected_uuid_bytes,
+                    ..Default::default()
+                },
+                #[cfg(target_arch = "x86_64")]
+                false,
+            )
+            .unwrap();
+
+        // We read intentionally one more byte to check that reading beyond EOF return zero.
+        let mut result_bytes = [0xCD_u8; 17];
+
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_UUID as u8, 0]);
+        assert_eq!(fw_cfg.selector, FW_CFG_UUID);
+
+        for byte in result_bytes.as_mut_slice() {
+            fw_cfg.read(0, DATA_OFFSET, byte.as_mut_bytes());
+        }
+        assert_eq!(fw_cfg.data_offset, 16);
+        assert_eq!(expected_uuid_bytes, result_bytes[0..16]);
+        assert_eq!([0x0; 1], result_bytes[16..]);
     }
 
     #[test]
