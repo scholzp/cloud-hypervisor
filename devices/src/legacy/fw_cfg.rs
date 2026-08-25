@@ -81,6 +81,7 @@ const FW_CFG_ID: u16 = 0x01;
 const FW_CFG_UUID: u16 = 0x02;
 const FW_CFG_RAM_SIZE: u16 = 0x03;
 const FW_CFG_NOGRAPHIC: u16 = 0x04;
+const FW_CFG_NB_CPUS: u16 = 0x05;
 const FW_CFG_KERNEL_SIZE: u16 = 0x08;
 const FW_CFG_INITRD_SIZE: u16 = 0x0b;
 const FW_CFG_KERNEL_DATA: u16 = 0x11;
@@ -205,6 +206,7 @@ pub struct FwCfgInit {
     pub uuid: [u8; 16],
     pub memory_size: u64,
     pub no_graphics: bool,
+    pub nb_cpus: u16,
 }
 
 // ARM MMIO transport needs a rework.
@@ -524,6 +526,8 @@ impl FwCfg {
         self.known_items[FW_CFG_RAM_SIZE as usize] = FwCfgContent::U64(fw_cfg_init.memory_size);
         self.known_items[FW_CFG_NOGRAPHIC as usize] =
             FwCfgContent::U16(u16::from(fw_cfg_init.no_graphics));
+        self.known_items[FW_CFG_NB_CPUS as usize] = FwCfgContent::U16(fw_cfg_init.nb_cpus);
+
         Ok(())
     }
 
@@ -1104,6 +1108,40 @@ mod unit_tests {
         }
         assert_eq!(fw_cfg.data_offset, 2);
         assert_eq!(expected_nographic_value.to_le_bytes(), result_bytes[0..2]);
+        assert_eq!([0x0; 1], result_bytes[2..]);
+    }
+
+    #[test]
+    fn test_cfg_nb_cpus() {
+        let gm = GuestMemoryAtomic::new(
+            GuestMemoryMmap::from_ranges(&[(GuestAddress(0), RAM_64BIT_START.0 as usize)]).unwrap(),
+        );
+
+        let mut fw_cfg = FwCfg::new(gm);
+        let expected_num_boot_cpus = 0xFFFF_u16;
+
+        fw_cfg
+            .populate_fw_cfg(
+                FwCfgInit {
+                    nb_cpus: expected_num_boot_cpus,
+                    ..Default::default()
+                },
+                #[cfg(target_arch = "x86_64")]
+                false,
+            )
+            .unwrap();
+
+        // We read intentionally one more byte to check that reading beyond EOF returns zero.
+        let mut result_bytes = [0xCD_u8; 3];
+
+        fw_cfg.write(0, PORT_FW_CFG_SELECTOR_OFFSET, &[FW_CFG_NB_CPUS as u8, 0]);
+        assert_eq!(fw_cfg.selector, FW_CFG_NB_CPUS);
+
+        for byte in result_bytes.as_mut_slice() {
+            fw_cfg.read(0, PORT_FW_CFG_DATA_OFFSET, byte.as_mut_bytes());
+        }
+        assert_eq!(fw_cfg.data_offset, 2);
+        assert_eq!(expected_num_boot_cpus.to_le_bytes(), result_bytes[0..2]);
         assert_eq!([0x0; 1], result_bytes[2..]);
     }
 
