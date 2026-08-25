@@ -395,6 +395,10 @@ pub enum Error {
     #[cfg(feature = "fw_cfg")]
     #[error("Error using fw_cfg while disabled")]
     FwCfgDisabled,
+
+    #[cfg(feature = "fw_cfg")]
+    #[error("Error parsing the VM's UUID")]
+    FwCfgInvalidUuid,
 }
 pub type Result<T> = result::Result<T, Error>;
 
@@ -1205,6 +1209,8 @@ impl Vm {
         fw_cfg_config: &FwCfgConfig,
         #[cfg(target_arch = "x86_64")] kvm_sev_snp_enabled: bool,
     ) -> Result<()> {
+        use uuid::Uuid;
+
         let mut e820_option: Option<usize> = None;
         if fw_cfg_config.e820 {
             e820_option = Some(self.config.lock().unwrap().memory.size as usize);
@@ -1279,12 +1285,26 @@ impl Vm {
         let Some(fw_cfg) = device_manager_binding.fw_cfg() else {
             return Err(Error::FwCfgDisabled);
         };
+
+        let vm_config = self.config.lock().unwrap();
         let init = FwCfgInit {
             e820: e820_option,
             cmdline: cmdline_option,
             kernel: kernel_option,
             initramfs: initramfs_option,
             item_list: fw_cfg_item_list_option,
+            uuid: if let Some(platform_config) = vm_config.platform.as_ref() {
+                *platform_config
+                    .system_uuid
+                    .as_ref()
+                    .map(|s| Uuid::parse_str(s))
+                    .transpose()
+                    .map_err(|_| Error::FwCfgInvalidUuid)?
+                    .unwrap_or(Uuid::nil())
+                    .as_bytes()
+            } else {
+                Uuid::nil().as_bytes().to_owned()
+            },
         };
 
         fw_cfg
