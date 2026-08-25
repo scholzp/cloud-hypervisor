@@ -87,6 +87,7 @@ const FW_CFG_NB_CPUS: u16 = 0x05;
 const FW_CFG_KERNEL_ADDR: u16 = 0x07;
 const FW_CFG_KERNEL_SIZE: u16 = 0x08;
 const FW_CFG_INITRD_SIZE: u16 = 0x0b;
+const FW_CFG_BOOT_MENU: u16 = 0x0e;
 const FW_CFG_MAX_CPUS: u16 = 0x0f;
 const FW_CFG_KERNEL_DATA: u16 = 0x11;
 const FW_CFG_INITRD_DATA: u16 = 0x12;
@@ -204,6 +205,7 @@ pub struct FwCfgInit {
     pub nb_cpus: u16,
     #[cfg(target_arch = "x86_64")]
     pub max_cpus: u16,
+    pub boot_menu: bool,
 }
 
 #[cfg(all(feature = "fw_cfg", target_arch = "aarch64"))]
@@ -526,6 +528,8 @@ impl FwCfg {
         {
             self.known_items[FW_CFG_MAX_CPUS as usize] = FwCfgContent::U16(fw_cfg_init.max_cpus);
         }
+        self.known_items[FW_CFG_BOOT_MENU as usize] =
+            FwCfgContent::U16(u16::from(fw_cfg_init.boot_menu));
 
         Ok(())
     }
@@ -1328,6 +1332,45 @@ mod unit_tests {
         }
         assert_eq!(fw_cfg.data_offset, 2);
         assert_eq!(expected_num_max_cpus.to_le_bytes(), result_bytes[0..2]);
+        assert_eq!([0x0; 1], result_bytes[2..]);
+    }
+
+    #[test]
+    fn test_cfg_boot_menu() {
+        let gm = GuestMemoryAtomic::new(
+            GuestMemoryMmap::from_ranges(&[(GuestAddress(0), RAM_64BIT_START.0 as usize)]).unwrap(),
+        );
+
+        let mut fw_cfg = FwCfg::new(gm);
+        let expected_boot_menu_value = 0x1_u16;
+
+        fw_cfg
+            .populate_fw_cfg(
+                None,
+                None,
+                None,
+                None,
+                None,
+                &FwCfgInit {
+                    boot_menu: true,
+                    ..Default::default()
+                },
+                #[cfg(target_arch = "x86_64")]
+                false,
+            )
+            .unwrap();
+
+        // We read intentionally one more byte to check that reading beyond EOF returns zero.
+        let mut result_bytes = [0xCD_u8; 3];
+
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_BOOT_MENU as u8, 0]);
+        assert_eq!(fw_cfg.selector, FW_CFG_BOOT_MENU);
+
+        for byte in result_bytes.as_mut_slice() {
+            fw_cfg.read(0, DATA_OFFSET, byte.as_mut_bytes());
+        }
+        assert_eq!(fw_cfg.data_offset, 2);
+        assert_eq!(expected_boot_menu_value.to_le_bytes(), result_bytes[0..2]);
         assert_eq!([0x0; 1], result_bytes[2..]);
     }
 
