@@ -84,6 +84,7 @@ const FW_CFG_UUID: u16 = 0x02;
 const FW_CFG_RAM_SIZE: u16 = 0x03;
 const FW_CFG_NOGRAPHIC: u16 = 0x04;
 const FW_CFG_NB_CPUS: u16 = 0x05;
+const FW_CFG_KERNEL_ADDR: u16 = 0x07;
 const FW_CFG_KERNEL_SIZE: u16 = 0x08;
 const FW_CFG_INITRD_SIZE: u16 = 0x0b;
 const FW_CFG_KERNEL_DATA: u16 = 0x11;
@@ -739,6 +740,10 @@ impl FwCfg {
         file.read_exact_at(&mut buffer, 0)?;
         let bp = boot_params::from_mut_slice(&mut buffer).unwrap();
 
+        // We currently only support high-loaded bzImage images with Linux boot protocol version 2.00 or later
+        if bp.hdr.header != 0x5372_6448 || bp.hdr.version < 0x0200 || bp.hdr.loadflags & 1 == 0 {
+            return Err(ErrorKind::InvalidInput.into());
+        }
         // For SEV-SNP guests on KVM, don't modify the kernel header so the
         // bytes sent via fw_cfg match what the VMM hashes for the launch digest.
         // The guest firmware handles these fields itself.
@@ -748,7 +753,6 @@ impl FwCfg {
             }
             bp.hdr.type_of_loader = 0xff;
         }
-
         let kernel_start = {
             let sects = if bp.hdr.setup_sects == 0 {
                 4
@@ -770,6 +774,9 @@ impl FwCfg {
 
         self.known_items[FW_CFG_SETUP_SIZE as usize] = FwCfgContent::U32(buffer.len() as u32);
         self.known_items[FW_CFG_SETUP_DATA as usize] = FwCfgContent::Bytes(buffer);
+        // high-loaded bzImage images with Linux boot protocol version 2.00 or
+        // later bzImage image types use 0x10_0000 as kernel address
+        self.known_items[FW_CFG_KERNEL_ADDR as usize] = FwCfgContent::U32(0x10_0000);
         self.known_items[FW_CFG_KERNEL_SIZE as usize] =
             FwCfgContent::U32(file.metadata()?.len() as u32 - kernel_start as u32);
         self.known_items[FW_CFG_KERNEL_DATA as usize] =
@@ -1206,6 +1213,16 @@ mod unit_tests {
             read_buffer[0..EXPECTED_KERNEL_START]
         );
 
+        // Check that FW_CFG_KERNEL_ADDR is set correctly.
+        read_buffer.fill(READ_BUFFER_INIT_VALUE);
+        fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_KERNEL_ADDR as u8, 0]);
+        assert_eq!(fw_cfg.selector, FW_CFG_KERNEL_ADDR);
+        for byte in &mut read_buffer[0..4] {
+            fw_cfg.read(0, DATA_OFFSET, byte.as_mut_bytes());
+        }
+        assert_eq!(fw_cfg.data_offset, 4);
+        assert_eq!(0x10_0000_u32.to_le_bytes(), read_buffer[0..4]);
+
         // Check that FW_CFG_KERNEL_SIZE is set correctly.
         read_buffer.fill(READ_BUFFER_INIT_VALUE);
         fw_cfg.write(0, SELECTOR_OFFSET, &[FW_CFG_KERNEL_SIZE as u8, 0]);
@@ -1231,6 +1248,41 @@ mod unit_tests {
             buffer[BUFFER_SIZE - EXPECTED_KERNEL_SIZE..],
             read_buffer[0..EXPECTED_KERNEL_SIZE]
         );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_x86_add_kernel_data_rejects_invalid_header() {
+        let gm = GuestMemoryAtomic::new(
+            GuestMemoryMmap::from_ranges(&[(GuestAddress(0), RAM_64BIT_START.0 as usize)]).unwrap(),
+        );
+        let mut fw_cfg = FwCfg::new(gm);
+        // Create a compatible header for the non-SNP path.
+        let mut bp = boot_params::default();
+        bp.hdr.header = 0x5372_6448;
+        bp.hdr.version = 0x0200;
+        bp.hdr.loadflags |= 1;
+
+        let mut illegal_header = bp;
+        illegal_header.hdr.header = 0;
+        let temp = TempFile::new().unwrap();
+        let mut temp_file = temp.as_file();
+        temp_file.write_all(illegal_header.as_slice()).unwrap();
+        let _ = fw_cfg.add_kernel_data(temp_file, false).unwrap_err();
+
+        let mut illegal_header = bp;
+        illegal_header.hdr.version = 0;
+        let temp = TempFile::new().unwrap();
+        let mut temp_file = temp.as_file();
+        temp_file.write_all(illegal_header.as_slice()).unwrap();
+        let _ = fw_cfg.add_kernel_data(temp_file, false).unwrap_err();
+
+        let mut illegal_header = bp;
+        illegal_header.hdr.loadflags = 0;
+        let temp = TempFile::new().unwrap();
+        let mut temp_file = temp.as_file();
+        temp_file.write_all(illegal_header.as_slice()).unwrap();
+        let _ = fw_cfg.add_kernel_data(temp_file, false).unwrap_err();
     }
 
     #[test]
