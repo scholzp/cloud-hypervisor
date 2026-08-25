@@ -725,24 +725,44 @@ impl FwCfg {
         file: &File,
         #[cfg(target_arch = "x86_64")] kvm_sev_snp_enabled: bool,
     ) -> Result<()> {
+        #[cfg(target_arch = "aarch64")]
+        self.add_aarch_kernel_data(file)?;
+        #[cfg(target_arch = "x86_64")]
+        self.add_x86_kernel_data(file, kvm_sev_snp_enabled)?;
+        Ok(())
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn add_aarch_kernel_data(&mut self, file: &File) -> Result<()> {
         let mut buffer = vec![0u8; size_of::<boot_params>()];
         file.read_exact_at(&mut buffer, 0)?;
         let bp = boot_params::from_mut_slice(&mut buffer).unwrap();
-        #[cfg(target_arch = "x86_64")]
-        {
-            // For SEV-SNP guests on KVM, don't modify the kernel header so the
-            // bytes sent via fw_cfg match what the VMM hashes for the launch digest.
-            // The guest firmware handles these fields itself.
-            if !kvm_sev_snp_enabled {
-                if bp.hdr.setup_sects == 0 {
-                    bp.hdr.setup_sects = 4;
-                }
-                bp.hdr.type_of_loader = 0xff;
-            }
-        }
-        #[cfg(target_arch = "aarch64")]
+
         let kernel_start = bp.text_offset;
-        #[cfg(target_arch = "x86_64")]
+
+        self.known_items[FW_CFG_KERNEL_SIZE as usize] =
+            FwCfgContent::U32(file.metadata()?.len() as u32 - kernel_start as u32);
+        self.known_items[FW_CFG_KERNEL_DATA as usize] =
+            FwCfgContent::File(kernel_start as u64, file.try_clone()?);
+        Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn add_x86_kernel_data(&mut self, file: &File, kvm_sev_snp_enabled: bool) -> Result<()> {
+        let mut buffer = vec![0u8; size_of::<boot_params>()];
+        file.read_exact_at(&mut buffer, 0)?;
+        let bp = boot_params::from_mut_slice(&mut buffer).unwrap();
+
+        // For SEV-SNP guests on KVM, don't modify the kernel header so the
+        // bytes sent via fw_cfg match what the VMM hashes for the launch digest.
+        // The guest firmware handles these fields itself.
+        if !kvm_sev_snp_enabled {
+            if bp.hdr.setup_sects == 0 {
+                bp.hdr.setup_sects = 4;
+            }
+            bp.hdr.type_of_loader = 0xff;
+        }
+
         let kernel_start = {
             let sects = if bp.hdr.setup_sects == 0 {
                 4
@@ -752,7 +772,6 @@ impl FwCfg {
             (sects as usize + 1) * 512
         };
 
-        #[cfg(target_arch = "x86_64")]
         if kernel_start <= buffer.len() {
             buffer.truncate(kernel_start);
         } else {
@@ -1143,6 +1162,111 @@ mod unit_tests {
         assert_eq!(fw_cfg.data_offset, 2);
         assert_eq!(expected_num_boot_cpus.to_le_bytes(), result_bytes[0..2]);
         assert_eq!([0x0; 1], result_bytes[2..]);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_x86_cfg_kernel_data() {
+        const BUFFER_SIZE: usize = 2 * 4096;
+        const INIT_VALUE: u8 = 0xFE;
+        const READ_BUFFER_INIT_VALUE: u8 = 0xCD;
+        const EXPECTED_KERNEL_START: usize = 5 * 512;
+        const EXPECTED_KERNEL_SIZE: usize = BUFFER_SIZE - EXPECTED_KERNEL_START;
+
+        // Create a compatible header for the non-SNP path.
+        let mut bp = boot_params::default();
+        bp.hdr.header = 0x5372_6448;
+        bp.hdr.version = 0x0200;
+        bp.hdr.loadflags |= 1;
+
+        // We create a buffer that follows the same rules as expected by load_kernel + canary bytes.
+        let mut buffer = [INIT_VALUE; BUFFER_SIZE];
+        buffer[0..size_of::<boot_params>()].copy_from_slice(bp.as_slice());
+
+        // Write the file and construct the expected patched header.
+        let temp = TempFile::new().unwrap();
+        let mut temp_file = temp.as_file();
+        temp_file.write_all(&buffer).unwrap();
+        bp.hdr.setup_sects = 4;
+        bp.hdr.type_of_loader = 0xff;
+        buffer[0..size_of::<boot_params>()].copy_from_slice(bp.as_slice());
+
+        // Create fw_cfg and register the kernel data.
+        let gm = GuestMemoryAtomic::new(
+            GuestMemoryMmap::from_ranges(&[(GuestAddress(0), RAM_64BIT_START.0 as usize)]).unwrap(),
+        );
+        let mut fw_cfg = FwCfg::new(gm);
+        fw_cfg.add_kernel_data(temp_file, false).unwrap();
+
+        // Buffer we store data read from fw_cfg in.
+        let mut read_buffer = [READ_BUFFER_INIT_VALUE; BUFFER_SIZE];
+
+        // Check that FW_CFG_SETUP_SIZE is set correctly.
+        fw_cfg.write(
+            0,
+            PORT_FW_CFG_SELECTOR_OFFSET,
+            &[FW_CFG_SETUP_SIZE as u8, 0],
+        );
+        assert_eq!(fw_cfg.selector, FW_CFG_SETUP_SIZE);
+        for byte in &mut read_buffer[0..4] {
+            fw_cfg.read(0, PORT_FW_CFG_DATA_OFFSET, byte.as_mut_bytes());
+        }
+        assert_eq!(fw_cfg.data_offset, 4);
+        assert_eq!(
+            u32::try_from(EXPECTED_KERNEL_START).unwrap().to_le_bytes(),
+            read_buffer[0..4]
+        );
+
+        // Check that FW_CFG_SETUP_DATA is set correctly.
+        read_buffer.fill(READ_BUFFER_INIT_VALUE);
+        fw_cfg.write(
+            0,
+            PORT_FW_CFG_SELECTOR_OFFSET,
+            &[FW_CFG_SETUP_DATA as u8, 0],
+        );
+        assert_eq!(fw_cfg.selector, FW_CFG_SETUP_DATA);
+        for byte in &mut read_buffer[..EXPECTED_KERNEL_START] {
+            fw_cfg.read(0, PORT_FW_CFG_DATA_OFFSET, byte.as_mut_bytes());
+        }
+        assert_eq!(fw_cfg.data_offset as usize, EXPECTED_KERNEL_START);
+        assert_eq!(
+            buffer[0..EXPECTED_KERNEL_START],
+            read_buffer[0..EXPECTED_KERNEL_START]
+        );
+
+        // Check that FW_CFG_KERNEL_SIZE is set correctly.
+        read_buffer.fill(READ_BUFFER_INIT_VALUE);
+        fw_cfg.write(
+            0,
+            PORT_FW_CFG_SELECTOR_OFFSET,
+            &[FW_CFG_KERNEL_SIZE as u8, 0],
+        );
+        assert_eq!(fw_cfg.selector, FW_CFG_KERNEL_SIZE);
+        for byte in &mut read_buffer[0..4] {
+            fw_cfg.read(0, PORT_FW_CFG_DATA_OFFSET, byte.as_mut_bytes());
+        }
+        assert_eq!(fw_cfg.data_offset, 4);
+        assert_eq!(
+            u32::try_from(EXPECTED_KERNEL_SIZE).unwrap().to_le_bytes(),
+            read_buffer[0..4]
+        );
+
+        // Check that FW_CFG_KERNEL_DATA is set correctly.
+        read_buffer.fill(READ_BUFFER_INIT_VALUE);
+        fw_cfg.write(
+            0,
+            PORT_FW_CFG_SELECTOR_OFFSET,
+            &[FW_CFG_KERNEL_DATA as u8, 0],
+        );
+        assert_eq!(fw_cfg.selector, FW_CFG_KERNEL_DATA);
+        for byte in &mut read_buffer[..EXPECTED_KERNEL_SIZE] {
+            fw_cfg.read(0, PORT_FW_CFG_DATA_OFFSET, byte.as_mut_bytes());
+        }
+        assert_eq!(fw_cfg.data_offset as usize, EXPECTED_KERNEL_SIZE);
+        assert_eq!(
+            buffer[BUFFER_SIZE - EXPECTED_KERNEL_SIZE..],
+            read_buffer[0..EXPECTED_KERNEL_SIZE]
+        );
     }
 
     #[test]
