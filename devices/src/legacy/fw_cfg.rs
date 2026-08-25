@@ -192,6 +192,15 @@ pub struct FwCfgItem {
     pub content: FwCfgContent,
 }
 
+#[derive(Debug, Default)]
+pub struct FwCfgInit {
+    pub e820: Option<usize>,
+    pub kernel: Option<File>,
+    pub initramfs: Option<File>,
+    pub cmdline: Option<std::ffi::CString>,
+    pub item_list: Option<Vec<FwCfgItem>>,
+}
+
 // ARM MMIO transport needs a rework.
 // Find more details here: https://github.com/cobaltcore-dev/cobaltcore/issues/650
 #[cfg(all(feature = "fw_cfg", target_arch = "aarch64"))]
@@ -480,30 +489,26 @@ impl FwCfg {
 
     pub fn populate_fw_cfg(
         &mut self,
-        mem_size: Option<usize>,
-        kernel: Option<File>,
-        initramfs: Option<File>,
-        cmdline: Option<std::ffi::CString>,
-        fw_cfg_item_list: Option<Vec<FwCfgItem>>,
+        fw_cfg_init: FwCfgInit,
         #[cfg(target_arch = "x86_64")] kvm_sev_snp_enabled: bool,
     ) -> Result<()> {
-        if let Some(mem_size) = mem_size {
+        if let Some(mem_size) = fw_cfg_init.e820 {
             self.add_e820(mem_size)?;
         }
-        if let Some(kernel) = kernel {
+        if let Some(kernel) = &fw_cfg_init.kernel {
             self.add_kernel_data(
-                &kernel,
+                kernel,
                 #[cfg(target_arch = "x86_64")]
                 kvm_sev_snp_enabled,
             )?;
         }
-        if let Some(cmdline) = cmdline {
+        if let Some(cmdline) = fw_cfg_init.cmdline {
             self.add_kernel_cmdline(cmdline);
         }
-        if let Some(initramfs) = initramfs {
-            self.add_initramfs_data(&initramfs)?;
+        if let Some(initramfs) = &fw_cfg_init.initramfs {
+            self.add_initramfs_data(initramfs)?;
         }
-        if let Some(fw_cfg_item_list) = fw_cfg_item_list {
+        if let Some(fw_cfg_item_list) = fw_cfg_init.item_list {
             for item in fw_cfg_item_list {
                 self.add_item(item)?;
             }
