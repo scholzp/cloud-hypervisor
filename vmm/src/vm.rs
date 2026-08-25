@@ -1305,6 +1305,7 @@ impl Vm {
             } else {
                 Uuid::nil().as_bytes().to_owned()
             },
+            memory_size: vm_config.memory.size,
         };
 
         fw_cfg
