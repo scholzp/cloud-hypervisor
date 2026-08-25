@@ -402,9 +402,11 @@ pub enum Error {
 
     #[cfg(feature = "fw_cfg")]
     #[error(
-        "Number of vCPUs cannot be represented with fw_cfg. {0} exceed the maximum count of 65536"
+        "Number of vCPUs cannot be represented with fw_cfg. {0} exceed the maximum count of 65535"
     )]
     FwCfgCannotRepresentNumVCpus(u32),
+    #[error("APIC limit cannot be represented with fw_cfg. {0} exceed the maximum of 65535")]
+    FwCfgCannotRepresentNumMaxVCpus(u32),
 }
 pub type Result<T> = result::Result<T, Error>;
 
@@ -1300,6 +1302,19 @@ impl Vm {
             .try_into()
             .map_err(|_| Error::FwCfgCannotRepresentNumVCpus(vm_config.cpus.boot_vcpus))?;
 
+        #[cfg(target_arch = "x86_64")]
+        // The actual APIC ID limit
+        let apic_limit = {
+            let max_apic_id = vm_config.max_apic_id();
+            if vm_config.cpus.topology.is_some() {
+                max_apic_id
+                    .checked_add(1)
+                    .ok_or(Error::FwCfgCannotRepresentNumMaxVCpus(max_apic_id))?
+            } else {
+                max_apic_id
+            }
+        };
+
         let init = FwCfgInit {
             uuid: if let Some(platform_config) = vm_config.platform.as_ref() {
                 platform_config
@@ -1317,6 +1332,9 @@ impl Vm {
             memory_size: vm_config.memory.size,
             no_graphics: true,
             nb_cpus,
+            #[cfg(target_arch = "x86_64")]
+            max_cpus: u16::try_from(apic_limit)
+                .map_err(|_| Error::FwCfgCannotRepresentNumMaxVCpus(apic_limit))?,
         };
 
         fw_cfg
