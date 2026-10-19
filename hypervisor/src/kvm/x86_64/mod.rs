@@ -76,6 +76,8 @@ pub fn check_required_kvm_extensions(kvm: &Kvm) -> KvmResult<()> {
 ///
 pub fn check_required_cvm_extensions(vm: &VmFd) -> KvmResult<()> {
     check_extension!(vm, Cap::GuestMemfd);
+    check_extension!(vm, Cap::MemoryAttributes);
+    check_extension!(vm, Cap::UserMemory2);
     Ok(())
 }
 
