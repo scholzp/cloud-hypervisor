@@ -219,8 +219,6 @@ impl VfioUserPciDevice {
                             false,
                             false,
                             hypervisor::MemoryVisibility::Shared,
-                            None,
-                            None,
                         )
                     }
                     .map_err(VfioUserPciDeviceError::MapRegionGuest)?;
@@ -490,8 +488,6 @@ impl PciDevice for VfioUserPciDevice {
                             false,
                             false,
                             hypervisor::MemoryVisibility::Shared,
-                            None,
-                            None,
                         )
                     }
                     .map_err(io::Error::other)?;

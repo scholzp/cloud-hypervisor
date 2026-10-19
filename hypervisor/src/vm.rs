@@ -390,8 +390,6 @@ pub trait Vm: Send + Sync + Any {
         readonly: bool,
         log_dirty_pages: bool,
         visibility: MemoryVisibility,
-        guest_memfd: Option<u64>,
-        guest_memfd_offset: Option<u64>,
     ) -> Result<()>;
     /// Removes a guest physical memory slot.
     ///

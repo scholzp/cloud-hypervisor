@@ -1900,8 +1900,6 @@ impl MemoryManager {
                     false,
                     false,
                     hypervisor::MemoryVisibility::Private,
-                    None,
-                    None,
                 )
                 .map_err(Error::CreateUefiFlash)?;
         }
@@ -2840,8 +2838,6 @@ impl MemoryManager {
                     readonly,
                     log_dirty,
                     visibility,
-                    guest_memfd,
-                    guest_memfd_offset,
                 )
                 .map_err(Error::CreateUserMemoryRegion)?;
         }

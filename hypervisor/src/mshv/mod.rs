@@ -2025,8 +2025,6 @@ impl vm::Vm for MshvVm {
         readonly: bool,
         _log_dirty_pages: bool,
         _visibility: vm::MemoryVisibility,
-        _guest_memfd: Option<u64>,
-        _guest_memfd_offset: Option<u64>,
     ) -> vm::Result<()> {
         let mut flags = 1 << MSHV_SET_MEM_BIT_EXECUTABLE;
         if !readonly {

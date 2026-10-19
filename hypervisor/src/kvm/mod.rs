@@ -1044,8 +1044,6 @@ impl vm::Vm for KvmVm {
         readonly: bool,
         log_dirty_pages: bool,
         visibility: vm::MemoryVisibility,
-        guest_memfd: Option<u64>,
-        guest_memfd_offset: Option<u64>,
     ) -> vm::Result<()> {
         let mut flags = 0;
         if readonly {
