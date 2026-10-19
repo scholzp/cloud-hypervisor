@@ -4353,8 +4353,6 @@ pub fn test_vm() {
                 region.as_ptr().cast(),
                 false,
                 false,
-                None,
-                None,
             )
             .expect("Cannot configure guest memory");
         }

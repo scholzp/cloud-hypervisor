@@ -5720,8 +5720,6 @@ impl IvshmemOps for IvshmemHandler {
             None,
             None,
             false,
-            false,
-            None,
         )
         .map_err(|e| IvshmemError::CreateUserMemoryRegion(e.into()))?;
         let region = Arc::new(region);
@@ -5746,8 +5744,6 @@ impl IvshmemOps for IvshmemHandler {
                     false,
                     false,
                     hypervisor::MemoryVisibility::Shared,
-                    None,
-                    None,
                 )
             }
         }

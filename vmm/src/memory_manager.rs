@@ -10,7 +10,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Seek, SeekFrom};
 use std::mem::{MaybeUninit, zeroed};
 use std::num::NonZeroUsize;
-use std::ops::{BitAnd, Deref, Not, Sub};
+use std::ops::{BitAnd, Not, Sub};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -1872,8 +1872,6 @@ impl MemoryManager {
                     false,
                     false,
                     hypervisor::MemoryVisibility::Private,
-                    None,
-                    None,
                 )
                 .map_err(Error::CreateUefiFlash)?;
         }
