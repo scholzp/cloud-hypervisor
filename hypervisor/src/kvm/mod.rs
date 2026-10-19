@@ -81,6 +81,8 @@ use kvm_bindings::{
     KVM_CAP_X86_APIC_BUS_CYCLES_NS, KVM_GUESTDBG_USE_HW_BP, KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK,
     KVM_X2APIC_API_USE_32BIT_IDS, MsrList, kvm_enable_cap, kvm_msr_entry,
 };
+#[cfg(all(target_arch = "x86_64", any(feature = "tdx", feature = "sev_snp")))]
+use x86_64::check_required_cvm_extensions;
 #[cfg(target_arch = "x86_64")]
 use x86_64::check_required_kvm_extensions;
 #[cfg(target_arch = "x86_64")]
@@ -1870,7 +1872,9 @@ impl hypervisor::Hypervisor for KvmHypervisor {
                 #[cfg(feature = "tdx")]
                 let confidential_vm_enabled = _config.tdx_enabled;
 
-                if confidential_vm_enabled && fd.check_extension(Cap::GuestMemfd) {
+                if confidential_vm_enabled {
+                    check_required_cvm_extensions(&fd)
+                        .map_err(|e| hypervisor::HypervisorError::CheckExtensions(e.into()))?;
                     memory_slots = Some(Arc::new(RwLock::new(HashMap::new())));
                 }
             }
