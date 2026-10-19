@@ -194,7 +194,6 @@ pub(crate) struct GuestRamMapping {
     zone_id: String,
     virtio_mem: bool,
     file_offset: u64,
-    guest_memfd: Option<u64>,
     #[serde(default)]
     backing_page_size: u64,
 }
@@ -215,10 +214,6 @@ impl GuestRamMapping {
 
     pub(crate) fn file_offset(&self) -> u64 {
         self.file_offset
-    }
-
-    pub(crate) fn guest_memfd(&self) -> Option<u64> {
-        self.guest_memfd
     }
 
     pub(crate) fn backing_page_size(&self) -> u64 {
@@ -687,8 +682,6 @@ impl MemoryManager {
         ram_regions: &[(GuestAddress, usize)],
         zones: &[MemoryZoneConfig],
         thp: bool,
-        tdx_enabled: bool,
-        vm: Option<&Arc<dyn hypervisor::Vm>>,
     ) -> Result<(Vec<Arc<GuestRegionMmap>>, MemoryZones), Error> {
         let mut zone_iter = zones.iter();
         let mut mem_regions = Vec::new();
@@ -761,8 +754,6 @@ impl MemoryManager {
                     zone.host_numa_node,
                     None,
                     thp,
-                    tdx_enabled,
-                    vm,
                 )?;
 
                 // Add region to the list of regions associated with the
@@ -905,8 +896,6 @@ impl MemoryManager {
                         zone_config.host_numa_node,
                         existing_memory_files.remove(&guest_ram_mapping.slot),
                         thp,
-                        false,
-                        None,
                     )?;
                     memory_regions.push(Arc::clone(&region));
                     if let Some(memory_zone) = memory_zones.get_mut(&guest_ram_mapping.zone_id) {
@@ -1797,20 +1786,6 @@ impl MemoryManager {
 
         for (zone_id, regions, zone_mergeable) in list {
             for (region, virtio_mem) in regions {
-                let inner_region = region.deref().deref();
-                let file_offset = inner_region.file_offset();
-                let guest_memfd = if let Some(file_offset) = file_offset {
-                    let fd = file_offset.arc().as_raw_fd();
-                    Some(fd as u64)
-                } else {
-                    None
-                };
-                let guest_memfd_offset = if let Some(file_offset) = file_offset {
-                    let start = file_offset.start();
-                    Some(start as u64)
-                } else {
-                    None
-                };
                 // SAFETY: guaranteed by GuestRegionMmap invariants
                 let slot = unsafe {
                     self.create_userspace_mapping(
@@ -1821,8 +1796,6 @@ impl MemoryManager {
                         false,
                         self.log_dirty,
                         hypervisor::MemoryVisibility::Private,
-                        guest_memfd,
-                        guest_memfd_offset,
                     )
                 }?;
 
@@ -1848,7 +1821,6 @@ impl MemoryManager {
                         zone_id: zone_id.clone(),
                         virtio_mem,
                         file_offset,
-                        guest_memfd,
                         backing_page_size,
                     });
 
@@ -1900,6 +1872,8 @@ impl MemoryManager {
                     false,
                     false,
                     hypervisor::MemoryVisibility::Private,
+                    None,
+                    None,
                 )
                 .map_err(Error::CreateUefiFlash)?;
         }
@@ -1990,13 +1964,8 @@ impl MemoryManager {
                 })
                 .collect();
 
-            let (mem_regions, mut memory_zones) = Self::create_memory_regions_from_zones(
-                &ram_regions,
-                &zones,
-                config.thp,
-                tdx_enabled,
-                Some(&vm),
-            )?;
+            let (mem_regions, mut memory_zones) =
+                Self::create_memory_regions_from_zones(&ram_regions, &zones, config.thp)?;
 
             let mut guest_memory = GuestMemoryMmap::from_arc_regions(mem_regions)
                 .map_err(Error::GuestRegionCollection)?;
@@ -2043,8 +2012,6 @@ impl MemoryManager {
                                 zone.host_numa_node,
                                 None,
                                 config.thp,
-                                tdx_enabled,
-                                Some(&vm),
                             )?;
 
                             guest_memory = guest_memory
@@ -2326,32 +2293,6 @@ impl MemoryManager {
         Ok(FileOffset::new(f, 0))
     }
 
-    fn create_guest_memfd_file(
-        vm: &Arc<dyn hypervisor::Vm>,
-        size: usize,
-    ) -> Result<FileOffset, Error> {
-        let kvm_vm = vm
-            .as_any()
-            .downcast_ref::<hypervisor::kvm::KvmVm>()
-            .unwrap();
-        if !kvm_vm.check_extension(Cap::GuestMemfd) || !kvm_vm.check_extension(Cap::UserMemory2) {
-            return Err(Error::MemoryRangeAllocation);
-        }
-
-        let gmem = kvm_create_guest_memfd {
-            size: size as u64,
-            flags: 0,
-            reserved: [0; 6],
-        };
-        let fd: RawFd = kvm_vm.create_guest_memfd(gmem).unwrap();
-
-        // SAFETY: fd is valid
-        let f = unsafe { File::from_raw_fd(fd) };
-        //f.set_len(size as u64).map_err(Error::SharedFileSetLen)?;
-
-        Ok(FileOffset::new(f, 0))
-    }
-
     fn open_backing_file(
         backing_file: &PathBuf,
         file_offset: u64,
@@ -2382,17 +2323,12 @@ impl MemoryManager {
         host_numa_node: Option<u32>,
         existing_memory_file: Option<File>,
         thp: bool,
-        tdx_enabled: bool,
-        vm: Option<&Arc<dyn hypervisor::Vm>>,
     ) -> Result<MmapRegion<AtomicBitmap>, Error> {
         let mut mmap_flags = if reserve { 0 } else { libc::MAP_NORESERVE };
 
         // The duplication of mmap_flags ORing here is unfortunate but it also makes
         // the complexity of the handling clear.
-        let fo = if tdx_enabled {
-            mmap_flags |= libc::MAP_PRIVATE | libc::MAP_ANONYMOUS;
-            Some(Self::create_guest_memfd_file(vm.unwrap(), size)?)
-        } else if let Some(f) = existing_memory_file {
+        let fo = if let Some(f) = existing_memory_file {
             // It must be MAP_SHARED as we wouldn't already have an FD
             mmap_flags |= libc::MAP_SHARED;
             Some(FileOffset::new(f, file_offset))
@@ -2511,8 +2447,6 @@ impl MemoryManager {
         host_numa_node: Option<u32>,
         existing_memory_file: Option<File>,
         thp: bool,
-        tdx_enabled: bool,
-        vm: Option<&Arc<dyn hypervisor::Vm>>,
     ) -> Result<Arc<GuestRegionMmap>, Error> {
         let r = Self::create_ram_region_raw(
             backing_file,
@@ -2525,8 +2459,6 @@ impl MemoryManager {
             host_numa_node,
             existing_memory_file,
             thp,
-            tdx_enabled,
-            vm,
         )?;
 
         Ok(Arc::new(GuestRegionMmap::new(r, start_addr).ok_or(
@@ -2614,8 +2546,6 @@ impl MemoryManager {
         &mut self,
         start_addr: GuestAddress,
         size: usize,
-        tdx_enabled: bool,
-        vm: Option<&Arc<dyn hypervisor::Vm>>,
     ) -> Result<Arc<GuestRegionMmap>, Error> {
         // Allocate memory for the region
         let region = MemoryManager::create_ram_region(
@@ -2630,8 +2560,6 @@ impl MemoryManager {
             None,
             None,
             self.thp,
-            tdx_enabled,
-            vm,
         )?;
 
         if self.prefault {
@@ -2644,22 +2572,6 @@ impl MemoryManager {
                 host_numa_node: None,
             }])?;
         }
-
-        // TODO: try to use memory slots like the SEV-SNP code does
-        let inner_region = region.deref();
-        let file_offset = inner_region.file_offset();
-        let guest_memfd = if let Some(file_offset) = file_offset {
-            let fd = file_offset.arc().as_raw_fd();
-            Some(fd as u64)
-        } else {
-            None
-        };
-        let guest_memfd_offset = if let Some(file_offset) = file_offset {
-            let start = file_offset.start();
-            Some(start as u64)
-        } else {
-            None
-        };
 
         // Map it into the guest
         // SAFETY: guaranteed by GuestMmapRegion invariants
@@ -2674,8 +2586,6 @@ impl MemoryManager {
                 false,
                 self.log_dirty,
                 hypervisor::MemoryVisibility::Private,
-                guest_memfd,
-                guest_memfd_offset,
             )
         }?;
 
@@ -2695,7 +2605,6 @@ impl MemoryManager {
                 zone_id: DEFAULT_MEMORY_ZONE.to_string(),
                 virtio_mem: false,
                 file_offset: 0,
-                guest_memfd,
                 backing_page_size,
             });
 
@@ -2744,7 +2653,7 @@ impl MemoryManager {
             ));
         }
 
-        let region = self.add_ram_region(start_addr, size, false, None)?;
+        let region = self.add_ram_region(start_addr, size)?;
 
         // Add region to the list of regions associated with the default
         // memory zone.
@@ -2817,8 +2726,6 @@ impl MemoryManager {
         readonly: bool,
         log_dirty: bool,
         visibility: hypervisor::MemoryVisibility,
-        guest_memfd: Option<u64>,
-        guest_memfd_offset: Option<u64>,
     ) -> Result<u32, Error> {
         let slot = self.allocate_memory_slot();
 
@@ -3776,7 +3683,7 @@ impl Migratable for MemoryManager {
     // together in the table if they are contiguous.
     fn dirty_log(&mut self) -> result::Result<MemoryRangeTable, MigratableError> {
         let mut table = MemoryRangeTable::default();
-        for r in self.guest_ram_mappings.read().unwrap().deref() {
+        for r in self.guest_ram_mappings.read().unwrap().iter() {
             let vm_dirty_bitmap = self
                 .vm
                 .get_dirty_log(r.slot, r.gpa, r.size)
