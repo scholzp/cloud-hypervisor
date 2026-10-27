@@ -22,7 +22,7 @@ use std::os::raw;
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
 use std::sync::Mutex;
-#[cfg(feature = "sev_snp")]
+#[cfg(any(feature = "sev_snp", feature = "tdx"))]
 use std::sync::OnceLock;
 #[cfg(target_arch = "x86_64")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,7 +41,7 @@ use igvm::snp_defs::{SevSelector, SevVmsa};
 use kvm_bindings::fam_wrappers::KvmIrqRouting;
 use kvm_bindings::kvm_create_guest_memfd;
 use kvm_ioctls::{NoDatamatch, VcpuFd, VmFd};
-#[cfg(feature = "sev_snp")]
+#[cfg(any(feature = "sev_snp", feature = "tdx"))]
 use log::debug;
 #[cfg(target_arch = "x86_64")]
 use log::warn;
@@ -217,6 +217,8 @@ ioctl_iow_nr!(
 
 #[cfg(feature = "sev_snp")]
 use igvm_defs::PAGE_SIZE_4K;
+#[cfg(feature = "tdx")]
+const PAGE_SIZE_4K: u64 = 4096;
 #[cfg(any(feature = "sev_snp", feature = "tdx"))]
 use kvm_bindings::{
     KVM_MEMORY_ATTRIBUTE_PRIVATE, KVM_X86_SNP_VM, kvm_memory_attributes, kvm_segment as Segment,
@@ -557,7 +559,7 @@ pub struct KvmVm {
     snp_guest_policy: OnceLock<u64>,
     dirty_log_slots: RwLock<HashMap<u32, KvmDirtyLogSlot>>,
     memory_slots: Option<Arc<RwLock<HashMap<u32, KvmMemorySlot>>>>,
-    #[cfg(feature = "sev_snp")]
+    #[cfg(any(feature = "sev_snp", feature = "tdx"))]
     memory_conversion_handler: Arc<OnceLock<Arc<dyn vm::MemoryConversionHandler>>>,
 }
 
@@ -682,7 +684,7 @@ impl KvmVm {
 /// let vm = hypervisor.create_vm(HypervisorVmConfig::default()).expect("new VM fd creation failed");
 /// ```
 impl vm::Vm for KvmVm {
-    #[cfg(feature = "sev_snp")]
+    #[cfg(any(feature = "sev_snp", feature = "tdx"))]
     fn register_memory_conversion_handler(&self, handler: Arc<dyn vm::MemoryConversionHandler>) {
         self.memory_conversion_handler
             .set(handler)
@@ -881,11 +883,11 @@ impl vm::Vm for KvmVm {
             xsave_size,
             #[cfg(target_arch = "x86_64")]
             has_xcrs: self.check_extension(Cap::Xcrs),
-            #[cfg(feature = "sev_snp")]
+            #[cfg(any(feature = "sev_snp", feature = "tdx"))]
             vm_fd: Arc::clone(&self.fd),
-            #[cfg(feature = "sev_snp")]
+            #[cfg(any(feature = "sev_snp", feature = "tdx"))]
             memory_slots: self.memory_slots.clone(),
-            #[cfg(feature = "sev_snp")]
+            #[cfg(any(feature = "sev_snp", feature = "tdx"))]
             memory_conversion_handler: Arc::clone(&self.memory_conversion_handler),
         };
         Ok(Box::new(vcpu))
@@ -1911,7 +1913,7 @@ impl hypervisor::Hypervisor for KvmHypervisor {
                 #[cfg(feature = "sev_snp")]
                 snp_guest_policy: OnceLock::new(),
                 memory_slots,
-                #[cfg(feature = "sev_snp")]
+                #[cfg(any(feature = "sev_snp", feature = "tdx"))]
                 memory_conversion_handler: Arc::new(OnceLock::new()),
             }))
         }
@@ -2030,15 +2032,15 @@ pub struct KvmVcpu {
     xsave_size: i32,
     #[cfg(target_arch = "x86_64")]
     has_xcrs: bool,
-    #[cfg(feature = "sev_snp")]
+    #[cfg(any(feature = "sev_snp", feature = "tdx"))]
     vm_fd: Arc<VmFd>,
-    #[cfg(feature = "sev_snp")]
+    #[cfg(any(feature = "sev_snp", feature = "tdx"))]
     memory_slots: Option<Arc<RwLock<HashMap<u32, KvmMemorySlot>>>>,
-    #[cfg(feature = "sev_snp")]
+    #[cfg(any(feature = "sev_snp", feature = "tdx"))]
     memory_conversion_handler: Arc<OnceLock<Arc<dyn vm::MemoryConversionHandler>>>,
 }
 
-#[cfg(feature = "sev_snp")]
+#[cfg(any(feature = "sev_snp", feature = "tdx"))]
 impl KvmVcpu {
     fn notify_memory_conversion_handler(
         &self,
@@ -2777,27 +2779,27 @@ impl cpu::Vcpu for KvmVcpu {
                     Ok(cpu::VmExit::Ignore)
                 }
                 VcpuExit::Hyperv => Ok(cpu::VmExit::Hyperv),
-                #[cfg(all(feature = "tdx", not(feature = "sev_snp")))]
-                VcpuExit::Hypercall(exit) => {
-                    if exit.nr == 12 {
-                        // KVM_HC_MAP_GPA_RANGE
-                        if let Some(vm_ops) = &self.vm_ops {
-                            vm_ops
-                                .handle_hc_map_gpa_range(exit)
-                                .map(|_| cpu::VmExit::Ignore)
-                                .map_err(|e| cpu::HypervisorCpuError::RunVcpu(e.into()))
-                                .unwrap();
-                        }
-                    } else {
-                        error!("Hypercall.nr:{:?} isn't supported\n", exit.nr);
-                        return Ok(cpu::VmExit::Shutdown);
-                    }
-                    Ok(cpu::VmExit::Ignore)
-                }
+                // #[cfg(all(feature = "tdx", not(feature = "sev_snp")))]
+                // VcpuExit::Hypercall(exit) => {
+                //     if exit.nr == 12 {
+                //         // KVM_HC_MAP_GPA_RANGE
+                //         if let Some(vm_ops) = &self.vm_ops {
+                //             vm_ops
+                //                 .handle_hc_map_gpa_range(exit)
+                //                 .map(|_| cpu::VmExit::Ignore)
+                //                 .map_err(|e| cpu::HypervisorCpuError::RunVcpu(e.into()))
+                //                 .unwrap();
+                //         }
+                //     } else {
+                //         error!("Hypercall.nr:{:?} isn't supported\n", exit.nr);
+                //         return Ok(cpu::VmExit::Shutdown);
+                //     }
+                //     Ok(cpu::VmExit::Ignore)
+                // }
                 #[cfg(feature = "tdx")]
                 VcpuExit::Unsupported(KVM_EXIT_TDX) => Ok(cpu::VmExit::Tdx),
                 VcpuExit::Debug(_) => Ok(cpu::VmExit::Debug),
-                #[cfg(all(feature = "sev_snp", not(feature = "tdx")))]
+                #[cfg(any(feature = "sev_snp", feature = "tdx"))]
                 VcpuExit::Hypercall(hypercall) => {
                     // https://docs.kernel.org/virt/kvm/x86/hypercalls.html#kvm-hc-map-gpa-range
                     const KVM_HC_MAP_GPA_RANGE: u64 = 12;

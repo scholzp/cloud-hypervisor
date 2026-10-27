@@ -2604,6 +2604,11 @@ impl CpuManager {
         self.hypervisor.hypervisor_type()
     }
 
+    #[cfg(feature = "tdx")]
+    pub(crate) fn hypervisor_type(&self) -> hypervisor::HypervisorType {
+        self.hypervisor.hypervisor_type()
+    }
+
     pub(crate) fn nmi(&mut self) -> Result<()> {
         self.vcpus_kick_signalled.store(true, Ordering::SeqCst);
         self.signal_vcpus()?;

@@ -137,6 +137,8 @@ use crate::pci_segment::PciSegment;
 use crate::serial_manager::{Error as SerialManagerError, SerialManager};
 #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
 use crate::sev::SevSnpSharedPageTracker;
+#[cfg(all(feature = "kvm", feature = "tdx"))]
+use crate::tdx::TdxSharedPageTracker;
 use crate::util::flatten_error_chain_to_string;
 #[cfg(feature = "ivshmem")]
 use crate::vm_config::IvshmemConfig;
@@ -532,6 +534,11 @@ pub enum DeviceManagerError {
     #[error("Failed to add DMA mapping handler to SEV-SNP shared-page tracker")]
     AddDmaMappingHandlerSevSnp(#[source] anyhow::Error),
 
+    /// Failed to add a DMA mapping handler to the SEV-SNP shared-page tracker.
+    #[cfg(all(feature = "kvm", feature = "tdx"))]
+    #[error("Failed to add DMA mapping handler to SEV-SNP shared-page tracker")]
+    AddDmaMappingHandlerTDX(#[source] anyhow::Error),
+
     /// Failed to create vfio-user client
     #[error("Failed to create vfio-user client")]
     VfioUserCreateClient(#[source] vfio_user::Error),
@@ -556,6 +563,11 @@ pub enum DeviceManagerError {
     #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
     #[error("Cannot hot-add a vfio-user device while SEV-SNP shared-page tracking is active")]
     VfioUserHotplugSevSnpTracker,
+
+    /// vfio-user cannot be hot-added while SEV-SNP shared-page tracking is active
+    #[cfg(all(feature = "kvm", feature = "tdx"))]
+    #[error("Cannot hot-add a vfio-user device while SEV-SNP shared-page tracking is active")]
+    VfioUserHotplugTdxTracker,
 
     /// Cannot duplicate file descriptor
     #[error("Cannot duplicate file descriptor")]
@@ -1000,7 +1012,10 @@ pub struct DeviceManager {
     vfio_ops: Option<Arc<dyn VfioOps>>,
 
     // Number of active VFIO devices sharing `vfio_ops`.
-    #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
+    #[cfg(all(
+        feature = "kvm",
+        any(all(feature = "sev_snp", feature = "fw_cfg"), feature = "tdx")
+    ))]
     shared_vfio_devices: usize,
 
     // Paravirtualized IOMMU
@@ -1084,6 +1099,10 @@ pub struct DeviceManager {
     // Track shared pages for SEV-SNP VFIO
     #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
     sev_snp_shared_page_tracker: Option<Arc<SevSnpSharedPageTracker>>,
+
+    // Track shared pages for TDX VFIO
+    #[cfg(all(feature = "kvm", feature = "tdx"))]
+    tdx_shared_page_tracker: Option<Arc<TdxSharedPageTracker>>,
 
     #[cfg(feature = "fw_cfg")]
     fw_cfg: Option<Arc<Mutex<FwCfg>>>,
@@ -1327,6 +1346,14 @@ impl DeviceManager {
             &memory_manager,
         );
 
+        #[cfg(all(feature = "kvm", feature = "tdx"))]
+        let tdx_shared_page_tracker = Self::create_tdx_shared_page_tracker(
+            &address_manager,
+            &config,
+            &cpu_manager,
+            &memory_manager,
+        );
+
         let device_manager = DeviceManager {
             address_manager: Arc::clone(&address_manager),
             console: Console::default(),
@@ -1345,7 +1372,10 @@ impl DeviceManager {
             legacy_interrupt_manager: None,
             passthrough_device: None,
             vfio_ops: None,
-            #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
+            #[cfg(all(
+                feature = "kvm",
+                any(all(feature = "sev_snp", feature = "fw_cfg"), feature = "tdx")
+            ))]
             shared_vfio_devices: 0,
             iommu_device: None,
             iommu_mapping: None,
@@ -1384,6 +1414,8 @@ impl DeviceManager {
             mmio_regions: Arc::new(Mutex::new(Vec::new())),
             #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
             sev_snp_shared_page_tracker,
+            #[cfg(all(feature = "kvm", feature = "tdx"))]
+            tdx_shared_page_tracker,
             #[cfg(feature = "fw_cfg")]
             fw_cfg: None,
             #[cfg(feature = "ivshmem")]
@@ -4075,7 +4107,35 @@ impl DeviceManager {
                     true
                 }
             };
-            #[cfg(not(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg")))]
+            #[cfg(all(feature = "kvm", feature = "tdx"))]
+            let static_map_all_ram = match self.tdx_shared_page_tracker.as_ref() {
+                // Confidential VM over iommufd supports shared/private tracking.
+                Some(tracker) => {
+                    tracker
+                        .add_dma_mapping_handler(
+                            Arc::clone(&vfio_mapping) as Arc<dyn ExternalDmaMapping>
+                        )
+                        .map_err(DeviceManagerError::AddDmaMappingHandlerTDX)?;
+                    false
+                }
+                None => {
+                    if self.config.lock().unwrap().is_tdx_enabled()
+                        && self.cpu_manager.lock().unwrap().hypervisor_type()
+                            == hypervisor::HypervisorType::Kvm
+                    {
+                        warn!(
+                            "SEV-SNP: static-pinning all guest RAM (no reclaim); per-page \
+                             shared-page tracking needs an iommufd backend, non-hugepage \
+                             RAM, and no vfio-user devices."
+                        );
+                    }
+                    true
+                }
+            };
+            #[cfg(not(all(
+                feature = "kvm",
+                any(all(feature = "sev_snp", feature = "fw_cfg"), feature = "tdx")
+            )))]
             let static_map_all_ram = true;
 
             if static_map_all_ram {
@@ -4210,7 +4270,10 @@ impl DeviceManager {
             bars,
         )?;
 
-        #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
+        #[cfg(all(
+            feature = "kvm",
+            any(all(feature = "sev_snp", feature = "fw_cfg"), feature = "tdx")
+        ))]
         if !device_cfg.pci_common.iommu {
             self.shared_vfio_devices += 1;
         }
@@ -4965,6 +5028,11 @@ impl DeviceManager {
             return Err(DeviceManagerError::VfioUserHotplugSevSnpTracker);
         }
 
+        #[cfg(all(feature = "kvm", feature = "tdx"))]
+        if self.tdx_shared_page_tracker.is_some() {
+            return Err(DeviceManagerError::VfioUserHotplugTdxTracker);
+        }
+
         let (bdf, device_name) = self.add_vfio_user_device(device_cfg, None)?;
 
         // Update the PCIU bitmap
@@ -5176,7 +5244,10 @@ impl DeviceManager {
             iommu_attached = true;
         }
 
-        #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
+        #[cfg(all(
+            feature = "kvm",
+            any(all(feature = "sev_snp", feature = "fw_cfg"), feature = "tdx")
+        ))]
         let mut removed_shared_vfio_device = false;
 
         let (pci_device, bus_device, virtio_device, remove_dma_handler) = match pci_device_handle {
@@ -5185,7 +5256,10 @@ impl DeviceManager {
             // It goes away when cleanup_vfio_ops drops the container after the
             // last shared VFIO device is removed.
             PciDeviceHandle::Vfio(vfio_pci_device) => {
-                #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
+                #[cfg(all(
+                    feature = "kvm",
+                    any(all(feature = "sev_snp", feature = "fw_cfg"), feature = "tdx")
+                ))]
                 {
                     removed_shared_vfio_device = !vfio_pci_device.lock().unwrap().iommu_attached();
                 }
@@ -5377,7 +5451,10 @@ impl DeviceManager {
         // any_device, bus_device and pci_device are released, the actual
         // device will be dropped.
 
-        #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
+        #[cfg(all(
+            feature = "kvm",
+            any(all(feature = "sev_snp", feature = "fw_cfg"), feature = "tdx")
+        ))]
         if removed_shared_vfio_device {
             if self.shared_vfio_devices == 0 {
                 error!("shared VFIO device count underflow on eject, falling to 0");
@@ -5634,8 +5711,15 @@ impl DeviceManager {
         // We need to release every other container reference before dropping
         // `self.vfio_ops`, so its drop closes the container fd and unpins
         // the shared pages.
-        #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
-        if let Some(tracker) = &self.sev_snp_shared_page_tracker {
+        #[cfg(all(
+            feature = "kvm",
+            any(all(feature = "sev_snp", feature = "fw_cfg"), feature = "tdx")
+        ))]
+        #[cfg(feature = "tdx")]
+        let shared_page_tracker = &self.tdx_shared_page_tracker;
+        #[cfg(feature = "sev_snp")]
+        let shared_page_tracker = &self.sev_snp_shared_page_tracker;
+        if let Some(tracker) = shared_page_tracker {
             if self.vfio_ops.is_some() && self.shared_vfio_devices == 0 {
                 // Drop the tracker's handler. The tracker itself persists so a
                 // later VFIO attach replays the current shared set.
@@ -5681,6 +5765,47 @@ impl DeviceManager {
         }
 
         let tracker = Arc::new(SevSnpSharedPageTracker::new());
+        for zone in memory_manager.lock().unwrap().memory_zones().values() {
+            for region in zone.regions() {
+                tracker.register_region(region.start_addr().raw_value(), region.len());
+            }
+        }
+        address_manager.vm.register_memory_conversion_handler(
+            Arc::clone(&tracker) as Arc<dyn hypervisor::MemoryConversionHandler>
+        );
+
+        Some(tracker)
+    }
+
+    #[cfg(all(feature = "kvm", feature = "tdx"))]
+    fn create_tdx_shared_page_tracker(
+        address_manager: &Arc<AddressManager>,
+        config: &Arc<Mutex<VmConfig>>,
+        cpu_manager: &Arc<Mutex<CpuManager>>,
+        memory_manager: &Arc<Mutex<MemoryManager>>,
+    ) -> Option<Arc<TdxSharedPageTracker>> {
+        // The SEV-SNP per-page tracker is only supported over an iommufd backend
+        // with no vfio-user devices. Otherwise, confidential VFIO falls back to
+        // static-mapping all pages.
+        let sev_snp_config_enabled = {
+            let config = config.lock().unwrap();
+            config.is_tdx_enabled()
+                && config.platform.as_ref().is_some_and(|p| p.iommufd)
+                && config
+                    .user_devices
+                    .as_ref()
+                    .is_none_or(|devices| devices.is_empty())
+        };
+
+        if !sev_snp_config_enabled {
+            return None;
+        }
+
+        if cpu_manager.lock().unwrap().hypervisor_type() != hypervisor::HypervisorType::Kvm {
+            return None;
+        }
+
+        let tracker = Arc::new(TdxSharedPageTracker::new());
         for zone in memory_manager.lock().unwrap().memory_zones().values() {
             for region in zone.regions() {
                 tracker.register_region(region.start_addr().raw_value(), region.len());

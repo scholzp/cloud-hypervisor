@@ -104,6 +104,8 @@ pub(crate) mod sev;
 mod sigwinch_listener;
 pub mod sparse;
 mod sync_utils;
+#[cfg(all(feature = "kvm", feature = "tdx"))]
+pub(crate) mod tdx;
 #[cfg(feature = "tdx")]
 pub(crate) mod tdx_qgs;
 mod uffd;
