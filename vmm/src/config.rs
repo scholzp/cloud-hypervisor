@@ -6523,8 +6523,8 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
             system_family: None,
             system_sku_number: None,
             chassis_asset_tag: None,
-            #[cfg(feature = "sev_snp")]
-            sev_snp: false,
+            #[cfg(any(feature = "tdx", feature = "sev_snp"))]
+            is_cvm: false,
         }
     }
 
