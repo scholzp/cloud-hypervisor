@@ -1059,7 +1059,7 @@ impl PlatformConfig {
             oem_strings=<list_of_strings>,chassis_asset_tag=<dmi_chassis_asset_tag>"
                 .to_string();
 
-            if cfg!(feature = "sev_snp") {
+            if cfg!(any(feature = "tdx", feature = "sev_snp")) {
                 syntax.push_str(",is_cvm=on|off");
             }
 
@@ -1124,7 +1124,7 @@ impl PlatformConfig {
         for field in SMBIOS_STRING_FIELDS {
             parser.add(field.key);
         }
-        #[cfg(feature = "sev_snp")]
+        #[cfg(any(feature = "tdx", feature = "sev_snp"))]
         parser.add("is_cvm");
         parser.parse(platform).map_err(Error::ParsePlatform)?;
 
@@ -1157,7 +1157,7 @@ impl PlatformConfig {
             .map_err(Error::ParsePlatform)?
             .unwrap_or(Toggle(true))
             .0;
-        #[cfg(feature = "sev_snp")]
+        #[cfg(any(feature = "tdx", feature = "sev_snp"))]
         let is_cvm = parser
             .convert::<Toggle>("is_cvm")
             .map_err(Error::ParsePlatform)?
@@ -1179,7 +1179,7 @@ impl PlatformConfig {
             chassis_asset_tag: None,
             iommufd,
             iommufd_fd,
-            #[cfg(feature = "sev_snp")]
+            #[cfg(any(feature = "tdx", feature = "sev_snp"))]
             is_cvm,
             vfio_p2p_dma,
         };
@@ -4360,7 +4360,7 @@ impl VmConfig {
             .extend(fds);
     }
 
-    #[cfg(feature = "sev_snp")]
+    #[cfg(any(feature = "tdx", feature = "sev_snp"))]
     pub fn is_cvm(&self) -> bool {
         self.platform.as_ref().is_some_and(|p| p.is_cvm)
     }
