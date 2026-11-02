@@ -686,7 +686,7 @@ impl Vm {
         {
             let config = _config.lock().unwrap();
             #[cfg(feature = "sev_snp")]
-            if config.is_sev_snp_enabled() {
+            if config.is_cvm() {
                 return true;
             }
         }
@@ -721,7 +721,7 @@ impl Vm {
         numa_nodes: &NumaNodes,
     ) -> Result<Arc<Mutex<cpu::CpuManager>>> {
         #[cfg(feature = "sev_snp")]
-        let sev_snp_enabled = config.lock().unwrap().is_sev_snp_enabled();
+        let sev_snp_enabled = config.lock().unwrap().is_cvm();
         #[cfg(feature = "igvm")]
         let igvm_enabled = config
             .lock()
@@ -830,7 +830,7 @@ impl Vm {
         );
 
         #[cfg(feature = "sev_snp")]
-        let sev_snp_enabled = config.lock().unwrap().is_sev_snp_enabled();
+        let sev_snp_enabled = config.lock().unwrap().is_cvm();
 
         // MSHV-specific initialization (non-aarch64)
         #[cfg(all(feature = "mshv", not(target_arch = "aarch64")))]
@@ -1343,7 +1343,7 @@ impl Vm {
                     None,
                     phys_bits,
                     #[cfg(feature = "sev_snp")]
-                    vm_config.is_sev_snp_enabled(),
+                    vm_config.is_cvm(),
                     None,
                     Default::default(),
                 )
@@ -2112,7 +2112,7 @@ impl Vm {
         #[cfg(feature = "sev_snp")]
         {
             let config = self.config.lock().unwrap();
-            if config.is_sev_snp_enabled() && !config.platform.as_ref().is_some_and(|p| p.iommufd) {
+            if config.is_cvm() && !config.platform.as_ref().is_some_and(|p| p.iommufd) {
                 return Err(Error::ConfigValidation(
                     ValidationError::SevSnpRequiresIommufd,
                 ));
@@ -2307,7 +2307,7 @@ impl Vm {
     pub fn add_vdpa(&mut self, mut vdpa_cfg: VdpaConfig) -> Result<PciDeviceInfo> {
         // vDPA devices aren't supported with SEV-SNP
         #[cfg(feature = "sev_snp")]
-        if self.config.lock().unwrap().is_sev_snp_enabled() {
+        if self.config.lock().unwrap().is_cvm() {
             return Err(Error::ConfigValidation(ValidationError::SevSnpNoVdpa));
         }
 
@@ -2478,7 +2478,7 @@ impl Vm {
         #[cfg(target_arch = "x86_64")]
         cfg_if::cfg_if! {
             if #[cfg(feature = "sev_snp")] {
-                let sev_snp_enabled = self.config.lock().unwrap().is_sev_snp_enabled();
+                let sev_snp_enabled = self.config.lock().unwrap().is_cvm();
                 let rsdp_addr = if sev_snp_enabled {
                     // In case of SEV-SNP guest ACPI tables are provided via
                     // IGVM. So skip the creation of ACPI tables and set the

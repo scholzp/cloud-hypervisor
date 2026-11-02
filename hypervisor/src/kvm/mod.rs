@@ -1505,7 +1505,7 @@ impl hypervisor::Hypervisor for KvmHypervisor {
             vm_type = KVM_X86_DEFAULT_VM.into();
 
             #[cfg(feature = "sev_snp")]
-            if _config.sev_snp_enabled {
+            if _config.is_cvm {
                 vm_type = KVM_X86_SNP_VM.into();
             }
         }
@@ -1549,7 +1549,7 @@ impl hypervisor::Hypervisor for KvmHypervisor {
             #[allow(unused_mut)]
             let mut memory_slots = None;
             #[cfg(feature = "sev_snp")]
-            if _config.sev_snp_enabled {
+            if _config.is_cvm {
                 check_required_sev_snp_extensions(&fd)
                     .map_err(|e| hypervisor::HypervisorError::CheckExtensions(e.into()))?;
                 memory_slots = Some(Arc::new(RwLock::new(HashMap::new())));
