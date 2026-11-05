@@ -20,7 +20,7 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::io::AsRawFd;
 #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
 use std::sync::Mutex;
-#[cfg(feature = "sev_snp")]
+#[cfg(any(feature = "tdx", feature = "sev_snp"))]
 use std::sync::OnceLock;
 #[cfg(target_arch = "x86_64")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,7 +37,7 @@ use igvm::snp_defs::{SevSelector, SevVmsa};
 use kvm_bindings::fam_wrappers::KvmIrqRouting;
 use kvm_bindings::kvm_create_guest_memfd;
 use kvm_ioctls::{NoDatamatch, VcpuFd, VmFd};
-#[cfg(feature = "sev_snp")]
+#[cfg(any(feature = "sev_snp", feature = "tdx"))]
 use log::debug;
 #[cfg(target_arch = "x86_64")]
 use log::warn;
@@ -182,6 +182,10 @@ const KVM_CAP_ARM_EL2: u32 = 240;
 const INVALID_GPA: u64 = u64::MAX;
 
 #[cfg(target_arch = "x86_64")]
+// https://docs.kernel.org/virt/kvm/x86/hypercalls.html#kvm-hc-map-gpa-range
+const KVM_HC_MAP_GPA_RANGE: u64 = 12;
+
+#[cfg(target_arch = "x86_64")]
 ioctl_io_nr!(KVM_NMI, kvm_bindings::KVMIO, 0x9a);
 // kvm-ioctls only exposes the vCPU device-attribute ioctls for aarch64.
 #[cfg(target_arch = "x86_64")]
@@ -201,12 +205,14 @@ ioctl_iow_nr!(
 #[cfg(target_arch = "x86_64")]
 const SHSTK_ECX_BIT: u8 = 7; // CET shadow stack, CPUID leaf 7 subleaf 0 ECX
 
-#[cfg(feature = "sev_snp")]
-use igvm_defs::PAGE_SIZE_4K;
 #[cfg(any(feature = "tdx", feature = "sev_snp"))]
+use igvm_defs::PAGE_SIZE_4K;
+#[cfg(feature = "sev_snp")]
 use kvm_bindings::{
     KVM_MEMORY_ATTRIBUTE_PRIVATE, KVM_X86_SNP_VM, kvm_memory_attributes, kvm_segment as Segment,
 };
+#[cfg(feature = "tdx")]
+use kvm_bindings::{KVM_MEMORY_ATTRIBUTE_PRIVATE, KVM_X86_TDX_VM, kvm_memory_attributes};
 use vm_memory::GuestAddress;
 #[cfg(feature = "sev_snp")]
 use x86_64::sev;
@@ -520,13 +526,13 @@ struct KvmDirtyLogSlot {
 }
 
 struct KvmMemorySlot {
-    #[cfg_attr(not(feature = "sev_snp"), expect(dead_code))]
+    #[cfg_attr(not(any(feature = "sev_snp", feature = "tdx")), expect(dead_code))]
     guest_memfd: OwnedFd,
-    #[cfg_attr(not(feature = "sev_snp"), expect(dead_code))]
+    #[cfg_attr(not(any(feature = "sev_snp", feature = "tdx")), expect(dead_code))]
     guest_phys_addr: u64,
-    #[cfg_attr(not(feature = "sev_snp"), expect(dead_code))]
+    #[cfg_attr(not(any(feature = "sev_snp", feature = "tdx")), expect(dead_code))]
     memory_size: u64,
-    #[cfg_attr(not(feature = "sev_snp"), expect(dead_code))]
+    #[cfg_attr(not(any(feature = "sev_snp", feature = "tdx")), expect(dead_code))]
     userspace_addr: u64,
 }
 
@@ -541,7 +547,7 @@ pub struct KvmVm {
     snp_guest_policy: OnceLock<u64>,
     dirty_log_slots: RwLock<HashMap<u32, KvmDirtyLogSlot>>,
     memory_slots: Option<Arc<RwLock<HashMap<u32, KvmMemorySlot>>>>,
-    #[cfg(feature = "sev_snp")]
+    #[cfg(any(feature = "sev_snp", feature = "tdx"))]
     memory_conversion_handler: Arc<OnceLock<Arc<dyn vm::MemoryConversionHandler>>>,
 }
 
@@ -651,7 +657,7 @@ impl KvmVm {
 /// let vm = hypervisor.create_vm(HypervisorVmConfig::default()).expect("new VM fd creation failed");
 /// ```
 impl vm::Vm for KvmVm {
-    #[cfg(feature = "sev_snp")]
+    #[cfg(any(feature = "sev_snp", feature = "tdx"))]
     fn register_memory_conversion_handler(&self, handler: Arc<dyn vm::MemoryConversionHandler>) {
         self.memory_conversion_handler
             .set(handler)
@@ -879,9 +885,9 @@ impl vm::Vm for KvmVm {
             has_xcrs: self.check_extension(Cap::Xcrs),
             #[cfg(any(target_arch = "x86_64", feature = "sev_snp"))]
             vm_fd: Arc::clone(&self.fd),
-            #[cfg(feature = "sev_snp")]
+            #[cfg(any(feature = "sev_snp", feature = "tdx"))]
             memory_slots: self.memory_slots.clone(),
-            #[cfg(feature = "sev_snp")]
+            #[cfg(any(feature = "sev_snp", feature = "tdx"))]
             memory_conversion_handler: Arc::clone(&self.memory_conversion_handler),
         };
         Ok(Box::new(vcpu))
@@ -1454,6 +1460,34 @@ impl KvmHypervisor {
             )),
         }
     }
+
+    #[cfg(any(feature = "tdx", feature = "sev_snp"))]
+    // Activates the KVM_HC_MAP_GPA_RANGE hypercall after ensuring KVM supports it.
+    fn activate_map_gpa_hc(&self, fd: &VmFd) -> hypervisor::Result<()> {
+        let mask = self.kvm.check_extension_int(Cap::ExitHypercall);
+        if mask < 0 {
+            return Err(hypervisor::HypervisorError::CheckExitHypercall(
+                io::Error::last_os_error().into(),
+            ));
+        }
+        // KVM supports the HC only if the respective bit is set
+        let hc_map_gpa_range_mask = 1 << KVM_HC_MAP_GPA_RANGE;
+        if mask & hc_map_gpa_range_mask == 0 {
+            return Err(hypervisor::HypervisorError::CheckExtensions(anyhow!(
+                "Hypercall mask is missing support for KVM_HC_MAP_GPA_RANGE"
+            )));
+        }
+        // Only activate the HC that we want to take. Must be a subset
+        // of the initially returned mask.
+        let cap = kvm_bindings::kvm_enable_cap {
+            cap: kvm_bindings::KVM_CAP_EXIT_HYPERCALL,
+            args: [hc_map_gpa_range_mask as _, 0, 0, 0],
+            ..Default::default()
+        };
+        fd.enable_cap(&cap)
+            .map_err(|e| hypervisor::HypervisorError::VmCreate(e.into()))?;
+        Ok(())
+    }
 }
 
 /// Implementation of Hypervisor trait for KVM
@@ -1508,6 +1542,11 @@ impl hypervisor::Hypervisor for KvmHypervisor {
             if _config.is_cvm {
                 vm_type = KVM_X86_SNP_VM.into();
             }
+
+            #[cfg(feature = "tdx")]
+            if _config.is_cvm {
+                vm_type = KVM_X86_TDX_VM.into();
+            }
         }
 
         loop {
@@ -1559,19 +1598,8 @@ impl hypervisor::Hypervisor for KvmHypervisor {
             let sev_fd = {
                 let sev_snp_enabled = vm_type == KVM_X86_SNP_VM as u64;
                 if sev_snp_enabled {
-                    let mask = self.kvm.check_extension_int(Cap::ExitHypercall);
-                    if mask < 0 {
-                        return Err(hypervisor::HypervisorError::CheckExitHypercall(
-                            io::Error::last_os_error().into(),
-                        ));
-                    }
-                    let cap = kvm_bindings::kvm_enable_cap {
-                        cap: kvm_bindings::KVM_CAP_EXIT_HYPERCALL,
-                        args: [mask as _, 0, 0, 0],
-                        ..Default::default()
-                    };
-                    fd.enable_cap(&cap)
-                        .map_err(|e| hypervisor::HypervisorError::VmCreate(e.into()))?;
+                    self.activate_map_gpa_hc(&fd)?;
+
                     let sev_dev = x86_64::sev::SevFd::new("/dev/sev")
                         .map_err(|e| hypervisor::HypervisorError::SevSnpCapabilities(e.into()))?;
                     sev_dev
@@ -1583,6 +1611,11 @@ impl hypervisor::Hypervisor for KvmHypervisor {
                 }
             };
 
+            #[cfg(feature = "tdx")]
+            if vm_type == KVM_X86_TDX_VM as u64 {
+                self.activate_map_gpa_hc(&fd)?;
+            }
+
             Ok(Arc::new(KvmVm {
                 fd: Arc::new(fd),
                 msrs,
@@ -1592,7 +1625,7 @@ impl hypervisor::Hypervisor for KvmHypervisor {
                 #[cfg(feature = "sev_snp")]
                 snp_guest_policy: OnceLock::new(),
                 memory_slots,
-                #[cfg(feature = "sev_snp")]
+                #[cfg(any(feature = "sev_snp", feature = "tdx"))]
                 memory_conversion_handler: Arc::new(OnceLock::new()),
             }))
         }
@@ -1707,13 +1740,13 @@ pub struct KvmVcpu {
     has_xcrs: bool,
     #[cfg(any(target_arch = "x86_64", feature = "sev_snp"))]
     vm_fd: Arc<VmFd>,
-    #[cfg(feature = "sev_snp")]
+    #[cfg(any(feature = "sev_snp", feature = "tdx"))]
     memory_slots: Option<Arc<RwLock<HashMap<u32, KvmMemorySlot>>>>,
-    #[cfg(feature = "sev_snp")]
+    #[cfg(any(feature = "sev_snp", feature = "tdx"))]
     memory_conversion_handler: Arc<OnceLock<Arc<dyn vm::MemoryConversionHandler>>>,
 }
 
-#[cfg(feature = "sev_snp")]
+#[cfg(any(feature = "sev_snp", feature = "tdx"))]
 impl KvmVcpu {
     fn validate_gpa_range(&self, gpa: u64, num_pages: u64) -> cpu::Result<u64> {
         if gpa.is_multiple_of(PAGE_SIZE_4K)
@@ -2419,10 +2452,8 @@ impl cpu::Vcpu for KvmVcpu {
                 }
                 VcpuExit::Hyperv => Ok(cpu::VmExit::Hyperv),
                 VcpuExit::Debug(_) => Ok(cpu::VmExit::Debug),
-                #[cfg(feature = "sev_snp")]
+                #[cfg(any(feature = "sev_snp", feature = "tdx"))]
                 VcpuExit::Hypercall(hypercall) => {
-                    // https://docs.kernel.org/virt/kvm/x86/hypercalls.html#kvm-hc-map-gpa-range
-                    const KVM_HC_MAP_GPA_RANGE: u64 = 12;
                     // 4th bit of attributes argument is encrypted page bit
                     match hypercall.nr {
                         KVM_HC_MAP_GPA_RANGE => {
@@ -2478,7 +2509,7 @@ impl cpu::Vcpu for KvmVcpu {
                     }
                 }
 
-                #[cfg(feature = "sev_snp")]
+                #[cfg(any(feature = "sev_snp", feature = "tdx"))]
                 VcpuExit::MemoryFault { flags, gpa, size } => {
                     debug!("VcpuExit::MemoryFault: flags={flags:#x}, gpa={gpa:#x}, size={size:#x}");
 
@@ -3747,7 +3778,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "sev_snp")]
+    #[cfg(any(feature = "tdx", feature = "sev_snp"))]
     fn test_validate_gpa_range() {
         use super::*;
 
