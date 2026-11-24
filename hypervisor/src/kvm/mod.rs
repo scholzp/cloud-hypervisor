@@ -18,7 +18,7 @@ use std::mem::offset_of;
 use std::num;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::io::AsRawFd;
-#[cfg(feature = "sev_snp")]
+#[cfg(any(feature = "sev_snp", feature = "tdx"))]
 use std::process;
 #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
 use std::sync::Mutex;
