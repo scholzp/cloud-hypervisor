@@ -88,6 +88,8 @@ use crate::coredump::{
 };
 #[cfg(feature = "sev_snp")]
 use crate::cvm::sev_snp;
+#[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
+use crate::cvm::sev_snp::MeasuredBootInfo;
 use crate::device_manager::{DeviceManager, DeviceManagerError};
 use crate::device_tree::DeviceTree;
 use crate::external_fds::UpdateFdsError;
@@ -102,8 +104,6 @@ use crate::memory_manager::{
 #[cfg(all(target_arch = "x86_64", feature = "guest_debug"))]
 use crate::migration::url_to_file;
 use crate::migration::{SNAPSHOT_CONFIG_FILE, SNAPSHOT_STATE_FILE, get_vm_snapshot, url_to_path};
-#[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
-use crate::sev::MeasuredBootInfo;
 use crate::util::flatten_error_chain_to_string;
 #[cfg(feature = "fw_cfg")]
 use crate::vm_config::FwCfgConfig;

@@ -105,8 +105,6 @@ mod pci_segment;
 mod prefault;
 pub mod seccomp_filters;
 mod serial_manager;
-#[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
-pub(crate) mod sev;
 mod sigwinch_listener;
 pub mod sparse;
 mod sync_utils;
