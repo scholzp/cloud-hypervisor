@@ -290,14 +290,18 @@ pub enum ClockRestoreMode {
     SnapshotRestore(SnapshotClockMode),
 }
 
+/// Launch settings for each confidential computing platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CvmConfig {
+    #[cfg(feature = "sev_snp")]
+    SevSnp { vmsa_features: u64 },
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HypervisorVmConfig {
-    #[cfg(feature = "sev_snp")]
-    pub sev_snp_enabled: bool,
+    pub cvm: Option<CvmConfig>,
     #[cfg(feature = "sev_snp")]
     pub mem_size: u64,
-    #[cfg(feature = "sev_snp")]
-    pub vmsa_features: u64,
     pub nested: bool,
     pub smt_enabled: bool,
 }

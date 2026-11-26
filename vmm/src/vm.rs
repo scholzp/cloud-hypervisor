@@ -105,6 +105,8 @@ use crate::memory_manager::{
 use crate::migration::url_to_file;
 use crate::migration::{SNAPSHOT_CONFIG_FILE, SNAPSHOT_STATE_FILE, get_vm_snapshot, url_to_path};
 use crate::util::flatten_error_chain_to_string;
+#[cfg(feature = "sev_snp")]
+use crate::vm_config::CvmType;
 #[cfg(feature = "fw_cfg")]
 use crate::vm_config::FwCfgConfig;
 use crate::vm_config::{
@@ -820,9 +822,6 @@ impl Vm {
             hypervisor::HypervisorType::Kvm
         );
 
-        #[cfg(feature = "sev_snp")]
-        let sev_snp_enabled = config.lock().unwrap().is_sev_snp_enabled();
-
         // MSHV-specific initialization (non-aarch64)
         #[cfg(all(feature = "mshv", not(target_arch = "aarch64")))]
         if is_mshv {
@@ -831,7 +830,7 @@ impl Vm {
 
         // SEV-SNP specific initialization
         #[cfg(feature = "sev_snp")]
-        if sev_snp_enabled {
+        if config.lock().unwrap().cvm() == Some(CvmType::SevSnp) {
             let payload = sev_snp::start_launch(
                 vm.as_ref(),
                 memory_manager,
@@ -1286,8 +1285,12 @@ impl Vm {
             let mut hv_config: hypervisor::HypervisorVmConfig =
                 vm_config.lock().unwrap().deref().into();
             #[cfg(feature = "sev_snp")]
-            if let Some(ref igvm) = igvm_file {
-                hv_config.vmsa_features = igvm_loader::extract_sev_features(igvm);
+            {
+                hv_config.cvm = vm_config
+                    .lock()
+                    .unwrap()
+                    .cvm()
+                    .map(|cvm| cvm.into_cvm_config(igvm_file.as_ref()));
             }
             Self::create_hypervisor_vm(hypervisor.as_ref(), hv_config)?
         };
