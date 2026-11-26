@@ -201,8 +201,9 @@ pub struct PlatformConfig {
     pub system_sku_number: Option<String>,
     #[serde(default)]
     pub chassis_asset_tag: Option<String>,
+    /// Deprecated. Select SEV-SNP with `cvm` instead.
     #[cfg(feature = "sev_snp")]
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub sev_snp: bool,
     #[serde(default = "default_platformconfig_iommufd")]
     pub iommufd: bool,

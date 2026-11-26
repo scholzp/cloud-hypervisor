@@ -1009,7 +1009,7 @@ macro_rules! platform_syntax {
 
 impl PlatformConfig {
     #[cfg(feature = "sev_snp")]
-    pub const SYNTAX: &'static str = platform_syntax!(",sev_snp=on|off,cvm=sev_snp");
+    pub const SYNTAX: &'static str = platform_syntax!(",cvm=sev_snp");
     #[cfg(not(feature = "sev_snp"))]
     pub const SYNTAX: &'static str = platform_syntax!();
 
@@ -1115,6 +1115,10 @@ impl PlatformConfig {
             .map_err(Error::ParsePlatform)?
             .unwrap_or(Toggle(false))
             .0;
+        #[cfg(feature = "sev_snp")]
+        if parser.is_set("sev_snp") {
+            eprintln!("Warning: --platform sev_snp is deprecated. Use cvm=sev_snp or omit cvm.");
+        }
 
         #[cfg(feature = "sev_snp")]
         let cvm = {
@@ -3569,6 +3573,17 @@ impl VmConfig {
     // configuration.
     pub fn validate(&mut self) -> ValidationResult<BTreeSet<String>> {
         let mut id_list = BTreeSet::new();
+
+        // Wire sev_snp=on to cvm=sev_snp, which snapshots record.
+        #[cfg(feature = "sev_snp")]
+        if let Some(platform) = self.platform.as_mut()
+            && platform.sev_snp
+        {
+            if platform.cvm.is_none() {
+                platform.cvm = Some(CvmType::SevSnp);
+            }
+            platform.sev_snp = false;
+        }
 
         if self.virtio_iommu_attached() && self.smmuv3_attached() {
             return Err(ValidationError::MixedIommuTypes);

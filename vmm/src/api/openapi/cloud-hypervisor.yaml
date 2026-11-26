@@ -1108,6 +1108,8 @@ components:
         sev_snp:
           type: boolean
           default: false
+          deprecated: true
+          description: Set cvm to sev_snp to enable SEV-SNP, or omit cvm for a non-confidential VM.
         iommufd:
           type: boolean
           default: true
