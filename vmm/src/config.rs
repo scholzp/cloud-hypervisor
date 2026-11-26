@@ -1009,7 +1009,7 @@ macro_rules! platform_syntax {
 
 impl PlatformConfig {
     #[cfg(feature = "sev_snp")]
-    pub const SYNTAX: &'static str = platform_syntax!(",sev_snp=on|off");
+    pub const SYNTAX: &'static str = platform_syntax!(",sev_snp=on|off,cvm=sev_snp");
     #[cfg(not(feature = "sev_snp"))]
     pub const SYNTAX: &'static str = platform_syntax!();
 
@@ -1072,6 +1072,8 @@ impl PlatformConfig {
         }
         #[cfg(feature = "sev_snp")]
         parser.add("sev_snp");
+        #[cfg(feature = "sev_snp")]
+        parser.add("cvm");
         parser.parse(platform).map_err(Error::ParsePlatform)?;
 
         let num_pci_segments: u16 = parser
@@ -1114,6 +1116,22 @@ impl PlatformConfig {
             .unwrap_or(Toggle(false))
             .0;
 
+        #[cfg(feature = "sev_snp")]
+        let cvm = {
+            let cvm = parser
+                .convert::<CvmType>("cvm")
+                .map_err(Error::ParsePlatform)?;
+            // An empty value would otherwise select an ordinary VM silently.
+            if cvm.is_none() && parser.is_set("cvm") {
+                return Err(Error::ParsePlatform(OptionParserError::InvalidValue(
+                    "cvm requires a value".to_owned(),
+                )));
+            }
+            cvm
+        };
+        #[cfg(not(feature = "sev_snp"))]
+        let cvm = None;
+
         let mut platform_config = PlatformConfig {
             num_pci_segments,
             iommu_segments,
@@ -1132,6 +1150,7 @@ impl PlatformConfig {
             #[cfg(feature = "sev_snp")]
             sev_snp,
             vfio_p2p_dma,
+            cvm,
         };
 
         for field in SMBIOS_STRING_FIELDS {
@@ -3565,7 +3584,7 @@ impl VmConfig {
 
         #[cfg(feature = "sev_snp")]
         {
-            let sev_snp_enabled = self.platform.as_ref().is_some_and(|p| p.sev_snp);
+            let sev_snp_enabled = self.is_sev_snp_enabled();
             if sev_snp_enabled {
                 let host_data_opt = &self.payload.as_ref().unwrap().host_data;
                 if let Some(host_data) = host_data_opt
@@ -4002,7 +4021,7 @@ impl VmConfig {
         self.iommu = self.virtio_iommu_attached();
 
         #[cfg(feature = "sev_snp")]
-        if self.virtio_iommu_attached() && self.platform.as_ref().is_some_and(|p| p.sev_snp) {
+        if self.virtio_iommu_attached() && self.is_sev_snp_enabled() {
             return Err(ValidationError::SevSnpNoViommu);
         }
 
@@ -4349,9 +4368,13 @@ impl VmConfig {
         removed
     }
 
+    pub fn cvm(&self) -> Option<CvmType> {
+        self.platform.as_ref()?.cvm
+    }
+
     #[cfg(feature = "sev_snp")]
     pub fn is_sev_snp_enabled(&self) -> bool {
-        self.platform.as_ref().is_some_and(|p| p.sev_snp)
+        self.cvm() == Some(CvmType::SevSnp)
     }
 }
 
@@ -7614,6 +7637,7 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
             chassis_asset_tag: None,
             #[cfg(feature = "sev_snp")]
             sev_snp: false,
+            cvm: None,
         }
     }
 
@@ -7629,10 +7653,41 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
     }
 
     #[test]
+    #[cfg(feature = "sev_snp")]
+    fn test_platform_cvm_parsing() -> Result<()> {
+        // SAFETY: This test input contains no inherited descriptors.
+        let config = unsafe { PlatformConfig::parse("cvm=sev_snp") }?;
+        assert_eq!(config.cvm, Some(CvmType::SevSnp));
+
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["cvm"], "sev_snp");
+        assert_eq!(
+            serde_json::from_value::<PlatformConfig>(json).unwrap(),
+            config
+        );
+
+        assert!(matches!(
+            // SAFETY: This test input contains no inherited descriptors.
+            unsafe { PlatformConfig::parse("cvm=none") },
+            Err(Error::ParsePlatform(OptionParserError::Conversion(option, _)))
+                if option == "cvm"
+        ));
+        assert!(matches!(
+            // SAFETY: This test input contains no inherited descriptors.
+            unsafe { PlatformConfig::parse("cvm=") },
+            Err(Error::ParsePlatform(OptionParserError::InvalidValue(_)))
+        ));
+        // A boolean must not silently select an unencrypted guest.
+        serde_json::from_str::<PlatformConfig>(r#"{"cvm":true}"#).unwrap_err();
+
+        Ok(())
+    }
+
+    #[test]
     #[cfg(all(feature = "kvm", feature = "sev_snp"))]
     fn test_sev_snp_fw_cfg_validation() {
         let mut config: VmConfig = serde_json::from_value(serde_json::json!({
-            "platform": { "sev_snp": true },
+            "platform": { "cvm": "sev_snp" },
             "payload": { "igvm": "/path/to/igvm" },
         }))
         .unwrap();
@@ -7654,9 +7709,9 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
                 config.validate(),
                 Err(ValidationError::SevSnpRequiresFwCfgAcpi)
             );
-            config.platform.as_mut().unwrap().sev_snp = false;
+            config.platform.as_mut().unwrap().cvm = None;
             config.validate().unwrap();
-            config.platform.as_mut().unwrap().sev_snp = true;
+            config.platform.as_mut().unwrap().cvm = Some(CvmType::SevSnp);
             config
                 .payload
                 .as_mut()
@@ -8896,7 +8951,7 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
         {
             let mut sev_snp_config = valid_config.clone();
             sev_snp_config.platform = Some(PlatformConfig {
-                sev_snp: true,
+                cvm: Some(CvmType::SevSnp),
                 ..platform_fixture()
             });
 
@@ -9008,7 +9063,7 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
                 ..device_fixture()
             }]);
             invalid_config.platform = Some(PlatformConfig {
-                sev_snp: true,
+                cvm: Some(CvmType::SevSnp),
                 iommufd: true,
                 ..platform_fixture()
             });
@@ -9019,7 +9074,7 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
 
             let mut invalid_config = sev_snp_config.clone();
             invalid_config.platform = Some(PlatformConfig {
-                sev_snp: true,
+                cvm: Some(CvmType::SevSnp),
                 iommu_segments: Some(Box::new([1])),
                 ..platform_fixture()
             });
@@ -9048,7 +9103,7 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
             let mut valid = sev_snp_config.clone();
             valid.devices = Some(vec![device_fixture()]);
             valid.platform = Some(PlatformConfig {
-                sev_snp: true,
+                cvm: Some(CvmType::SevSnp),
                 iommufd: true,
                 ..platform_fixture()
             });

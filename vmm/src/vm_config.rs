@@ -6,7 +6,6 @@ use std::net::{IpAddr, SocketAddr};
 use std::ops::{Deref, DerefMut};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
-#[cfg(feature = "fw_cfg")]
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{fmt, fs, io, result};
@@ -151,6 +150,30 @@ pub fn default_platformconfig_vfio_p2p_dma() -> bool {
     true
 }
 
+/// Confidential VM (CVM) type requested in the platform configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CvmType {
+    #[cfg(feature = "sev_snp")]
+    SevSnp,
+}
+
+#[derive(Debug, Error)]
+#[error("CVM platform {0} is not supported")]
+pub struct ParseCvmTypeError(String);
+
+impl FromStr for CvmType {
+    type Err = ParseCvmTypeError;
+
+    fn from_str(s: &str) -> result::Result<Self, ParseCvmTypeError> {
+        match s {
+            #[cfg(feature = "sev_snp")]
+            "sev_snp" => Ok(CvmType::SevSnp),
+            _ => Err(ParseCvmTypeError(s.to_owned())),
+        }
+    }
+}
+
 #[serde_with::skip_serializing_none]
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PlatformConfig {
@@ -188,6 +211,8 @@ pub struct PlatformConfig {
     pub iommufd_fd: ExternalFd,
     #[serde(default = "default_platformconfig_vfio_p2p_dma")]
     pub vfio_p2p_dma: bool,
+    #[serde(default)]
+    pub cvm: Option<CvmType>,
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
@@ -1422,7 +1447,7 @@ impl VmConfig {
         }
 
         #[cfg(feature = "sev_snp")]
-        if self.platform.as_ref().is_some_and(|p| p.sev_snp) {
+        if self.is_sev_snp_enabled() {
             landlock.add_rule_with_access(Path::new("/dev/sev"), "rw")?;
         }
 

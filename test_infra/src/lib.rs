@@ -1455,7 +1455,7 @@ impl Guest {
         });
 
         if self.vm_type == GuestVmType::Confidential {
-            body["platform"] = serde_json::json!({"sev_snp": true});
+            body["platform"] = serde_json::json!({"cvm": "sev_snp"});
             body["payload"] = serde_json::json!({
             "igvm": direct_igvm_boot_path(Some("hvc0"))
                 .unwrap()
@@ -2208,7 +2208,7 @@ impl<'a> GuestCommand<'a> {
             self.command.args([
                 "--platform",
                 &format!(
-                    "{}sev_snp=on",
+                    "{}cvm=sev_snp",
                     if let Some(p) = platform {
                         format!("{p},")
                     } else {

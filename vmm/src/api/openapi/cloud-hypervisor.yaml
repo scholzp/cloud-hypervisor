@@ -1114,6 +1114,9 @@ components:
         vfio_p2p_dma:
           type: boolean
           default: true
+        cvm:
+          type: string
+          enum: ["sev_snp"]
 
     MemoryZoneConfig:
       required:
