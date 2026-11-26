@@ -27,9 +27,7 @@ use igvm_defs::SnpPolicy;
 use vm_migration::{Snapshot, snapshot_from_id};
 
 #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
-pub(crate) use self::sev::{
-    MeasuredBootInfo, SEV_HASH_BLOCK_ADDRESS, SEV_HASH_BLOCK_SIZE, SevSnpSharedPageTracker,
-};
+pub(crate) use self::sev::{MeasuredBootInfo, SEV_HASH_BLOCK_ADDRESS, SEV_HASH_BLOCK_SIZE};
 use crate::cpu::CpuManager;
 use crate::igvm::igvm_loader;
 use crate::memory_manager::MemoryManager;

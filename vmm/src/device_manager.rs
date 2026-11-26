@@ -148,7 +148,7 @@ use crate::cpu::{
     CpuManager,
 };
 #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
-use crate::cvm::sev_snp::SevSnpSharedPageTracker;
+use crate::cvm::CvmSharedPageTracker;
 use crate::device_tree::{DeviceNode, DeviceTree};
 use crate::interrupt::{LegacyUserspaceInterruptManager, MsiInterruptManager};
 use crate::locked_unix_listener::LockedUnixListener;
@@ -1146,7 +1146,7 @@ pub struct DeviceManager {
 
     // Track shared pages for SEV-SNP VFIO
     #[cfg(all(feature = "kvm", feature = "sev_snp", feature = "fw_cfg"))]
-    sev_snp_shared_page_tracker: Option<Arc<SevSnpSharedPageTracker>>,
+    sev_snp_shared_page_tracker: Option<Arc<CvmSharedPageTracker>>,
 
     #[cfg(feature = "fw_cfg")]
     fw_cfg: Option<Arc<Mutex<FwCfg>>>,
@@ -6175,7 +6175,7 @@ impl DeviceManager {
         config: &Arc<Mutex<VmConfig>>,
         cpu_manager: &Arc<Mutex<CpuManager>>,
         memory_manager: &Arc<Mutex<MemoryManager>>,
-    ) -> Option<Arc<SevSnpSharedPageTracker>> {
+    ) -> Option<Arc<CvmSharedPageTracker>> {
         // The SEV-SNP per-page tracker is only supported over an iommufd backend
         // with no vfio-user devices. Otherwise, confidential VFIO falls back to
         // static-mapping all pages.
@@ -6197,7 +6197,7 @@ impl DeviceManager {
             return None;
         }
 
-        let tracker = Arc::new(SevSnpSharedPageTracker::new());
+        let tracker = Arc::new(CvmSharedPageTracker::new());
         for zone in memory_manager.lock().unwrap().memory_zones().values() {
             for region in zone.regions() {
                 tracker.register_region(region.start_addr().raw_value(), region.len());
